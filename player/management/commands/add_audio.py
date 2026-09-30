@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from player.models import AudioFile, parse_call_name
 from player.transcription import transcribe
-from player.views import wav_duration
+from player.audio_utils import wav_duration
 
 
 class Command(BaseCommand):

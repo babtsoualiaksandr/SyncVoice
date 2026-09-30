@@ -6,7 +6,14 @@ app_name = 'player'
 
 urlpatterns = [
     path('', views.index, name='index'),
+    path('upload/', views.upload, name='upload'),
+    path('settings/', views.settings_view, name='settings'),
+    path('settings/test-connection/', views.test_connection, name='test_connection'),
+    path('pbx/sync/', views.sync_start, name='sync_start'),
+    path('status/', views.status, name='status'),
+    path('report/<str:day>.xlsx', views.report, name='report'),
     path('audio/<int:pk>/', views.detail, name='detail'),
+    path('audio/<int:pk>/review/', views.review_save, name='review_save'),
     path('audio/<int:pk>/stream/', views.stream, name='stream'),
     path('audio/<int:pk>/subtitles/', views.subtitles, name='subtitles'),
     path('audio/<int:pk>/subtitles.<str:fmt>', views.download_subtitles, name='download_subtitles'),

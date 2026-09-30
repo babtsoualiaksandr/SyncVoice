@@ -11,10 +11,11 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 import certifi
-import imageio_ffmpeg
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,7 +30,8 @@ SECRET_KEY = 'django-insecure-6u1=u9u=imn!lqtb_dk%ak_36*5c1t8(ewp-#=!2_i-!by^zc&
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+# The app runs locally on the user's machine (waitress binds to 127.0.0.1).
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
 
 # Application definition
@@ -46,6 +48,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -81,6 +84,8 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
+        # The worker thread and web requests write concurrently: wait for locks.
+        'OPTIONS': {'timeout': 20},
     }
 }
 
@@ -121,6 +126,10 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+# Served by WhiteNoise straight from the apps' static/ dirs (no collectstatic),
+# so it works under waitress as well as runserver.
+WHITENOISE_USE_FINDERS = True
+WHITENOISE_AUTOREFRESH = DEBUG
 
 # Uploaded audio files
 MEDIA_URL = 'media/'
@@ -129,10 +138,18 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # Whisper
 # Model: tiny, base, small, medium, large. Bigger is more accurate but slower.
-# Language: e.g. 'ru', or None to auto-detect.
+# Language: 'ru' by default (calls are in Russian); set WHISPER_LANGUAGE=auto to detect.
 
 WHISPER_MODEL = os.environ.get('WHISPER_MODEL', 'small')
-WHISPER_LANGUAGE = os.environ.get('WHISPER_LANGUAGE') or None
+# faster-whisper or openai-whisper; see player/transcription.py. On macOS
+# (Intel) openai-whisper is much faster, elsewhere faster-whisper is expected
+# to be — check with `manage.py asr_benchmark`.
+WHISPER_ENGINE = os.environ.get(
+    'WHISPER_ENGINE', 'openai-whisper' if sys.platform == 'darwin' else 'faster-whisper',
+)
+WHISPER_LANGUAGE = os.environ.get('WHISPER_LANGUAGE', 'ru')
+if WHISPER_LANGUAGE == 'auto':
+    WHISPER_LANGUAGE = None
 
 # python.org builds of Python ship without root certificates, so downloading
 # Whisper models fails with CERTIFICATE_VERIFY_FAILED. Use certifi's bundle.
@@ -150,16 +167,25 @@ MAILERS = {
 
 
 # FFmpeg
-# Whisper calls the `ffmpeg` command by name, so expose the binary under that
-# name in BASE_DIR/.bin and put that directory first on PATH.
-# Override with the FFMPEG_BINARY environment variable.
+# Only needed by the openai-whisper fallback (faster-whisper decodes audio
+# itself). Whisper calls the `ffmpeg` command by name, so put a copy of the
+# imageio-ffmpeg binary named ffmpeg(.exe) into BASE_DIR/.bin and put that
+# directory first on PATH. A copy, not a symlink: symlinks need admin rights
+# on Windows. Override with the FFMPEG_BINARY environment variable.
 
-FFMPEG_BINARY = os.environ.get('FFMPEG_BINARY') or imageio_ffmpeg.get_ffmpeg_exe()
+try:
+    import imageio_ffmpeg
+except ImportError:
+    imageio_ffmpeg = None
 
-_ffmpeg_dir = BASE_DIR / '.bin'
-_ffmpeg_link = _ffmpeg_dir / 'ffmpeg'
-if not _ffmpeg_link.exists() or _ffmpeg_link.resolve() != Path(FFMPEG_BINARY).resolve():
-    _ffmpeg_dir.mkdir(exist_ok=True)
-    _ffmpeg_link.unlink(missing_ok=True)
-    _ffmpeg_link.symlink_to(FFMPEG_BINARY)
-os.environ['PATH'] = f"{_ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+FFMPEG_BINARY = os.environ.get('FFMPEG_BINARY') or (imageio_ffmpeg and imageio_ffmpeg.get_ffmpeg_exe())
+
+if FFMPEG_BINARY:
+    _ffmpeg_dir = BASE_DIR / '.bin'
+    _ffmpeg_copy = _ffmpeg_dir / ('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg')
+    _source = Path(FFMPEG_BINARY)
+    if not _ffmpeg_copy.exists() or _ffmpeg_copy.stat().st_size != _source.stat().st_size:
+        _ffmpeg_dir.mkdir(exist_ok=True)
+        _ffmpeg_copy.unlink(missing_ok=True)  # also removes an old symlink
+        shutil.copy2(_source, _ffmpeg_copy)
+    os.environ['PATH'] = f"{_ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"

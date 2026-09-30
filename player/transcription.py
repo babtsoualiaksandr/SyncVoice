@@ -1,30 +1,94 @@
-"""Speech recognition with Whisper.
+"""Speech recognition.
 
-The model is loaded once per process and reused. Whisper is CPU-heavy, so
-recognitions run one at a time: a lock serializes them.
+Two engines: faster-whisper (CTranslate2, int8, no torch) and openai-whisper
+(torch). Which one is faster depends on the machine — on an old Intel Mac
+openai-whisper measured ~4.7x faster, since the macOS x86 CTranslate2 build
+lacks MKL. settings.WHISPER_ENGINE picks one; if it isn't installed the
+other is used. `manage.py asr_benchmark` measures both on the current machine.
+
+The model is loaded once per process and reused; recognitions run one at a
+time (the worker processes the queue sequentially, the lock guards against
+accidental concurrent calls).
 """
 import logging
 import threading
 
 from django.conf import settings
-from django.db import close_old_connections, transaction
+from django.db import transaction
 
 from .models import AudioFile, Segment
 
 logger = logging.getLogger(__name__)
 
-_model = None
+_engine = None
 _lock = threading.Lock()
 
 
-def _get_model():
-    global _model
-    if _model is None:
-        import whisper  # heavy import (torch), load only when needed
+class FasterWhisperEngine:
+    name = 'faster-whisper'
 
-        logger.info('Loading Whisper model %r', settings.WHISPER_MODEL)
-        _model = whisper.load_model(settings.WHISPER_MODEL)
-    return _model
+    def __init__(self, model_name):
+        from faster_whisper import WhisperModel
+
+        self.model = WhisperModel(model_name, device='cpu', compute_type='int8')
+
+    def transcribe(self, path, language):
+        segments, info = self.model.transcribe(
+            str(path), language=language, vad_filter=True, beam_size=5,
+        )
+        segments = [(s.start, s.end, s.text) for s in segments]  # generator: decoding happens here
+        return segments, info.language
+
+
+class OpenAIWhisperEngine:
+    name = 'openai-whisper'
+
+    def __init__(self, model_name):
+        import whisper
+
+        self.model = whisper.load_model(model_name)
+
+    def transcribe(self, path, language):
+        result = self.model.transcribe(str(path), language=language, fp16=False)
+        segments = [(s['start'], s['end'], s['text']) for s in result['segments']]
+        return segments, result.get('language')
+
+
+ENGINES = {
+    FasterWhisperEngine.name: (FasterWhisperEngine, 'faster_whisper'),
+    OpenAIWhisperEngine.name: (OpenAIWhisperEngine, 'whisper'),
+}
+
+
+def available_engines() -> list[str]:
+    names = []
+    for name, (_, module) in ENGINES.items():
+        try:
+            __import__(module)
+        except ImportError:
+            continue
+        names.append(name)
+    return names
+
+
+def make_engine(name: str | None = None):
+    """Engine `name` (default settings.WHISPER_ENGINE), or whichever is installed."""
+    available = available_engines()
+    if not available:
+        raise RuntimeError('Не установлен ни faster-whisper, ни openai-whisper.')
+    name = name or settings.WHISPER_ENGINE
+    if name not in available:
+        name = available[0]
+    engine_cls, _ = ENGINES[name]
+    logger.info('Loading %s model %r', name, settings.WHISPER_MODEL)
+    return engine_cls(settings.WHISPER_MODEL)
+
+
+def _get_engine():
+    global _engine
+    if _engine is None:
+        _engine = make_engine()
+    return _engine
 
 
 def transcribe(audio: AudioFile) -> None:
@@ -34,11 +98,7 @@ def transcribe(audio: AudioFile) -> None:
         audio.error = ''
         audio.save(update_fields=['status', 'error'])
         try:
-            result = _get_model().transcribe(
-                audio.file.path,
-                language=settings.WHISPER_LANGUAGE,
-                fp16=False,  # fp16 is not supported on CPU
-            )
+            raw_segments, language = _get_engine().transcribe(audio.file.path, settings.WHISPER_LANGUAGE)
         except Exception as exc:
             logger.exception('Transcription of %s failed', audio.pk)
             audio.status = AudioFile.Status.ERROR
@@ -47,29 +107,12 @@ def transcribe(audio: AudioFile) -> None:
             return
 
     segments = [
-        Segment(audio=audio, index=i, start=s['start'], end=s['end'], text=s['text'].strip())
-        for i, s in enumerate(result['segments'])
+        Segment(audio=audio, index=i, start=start, end=end, text=text.strip())
+        for i, (start, end, text) in enumerate(raw_segments)
     ]
     with transaction.atomic():
         audio.segments.all().delete()
         Segment.objects.bulk_create(segments)
-        audio.language = result.get('language') or ''
+        audio.language = language or ''
         audio.status = AudioFile.Status.DONE
         audio.save(update_fields=['language', 'status'])
-
-
-def transcribe_in_background(audio_id: int) -> None:
-    """Run `transcribe` in a daemon thread so the request returns immediately.
-
-    Fine for a single-process dev server; for production use a task queue
-    (Celery, RQ, ...).
-    """
-
-    def run():
-        close_old_connections()
-        try:
-            transcribe(AudioFile.objects.get(pk=audio_id))
-        finally:
-            close_old_connections()
-
-    threading.Thread(target=run, daemon=True, name=f'transcribe-{audio_id}').start()

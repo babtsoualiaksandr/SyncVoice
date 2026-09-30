@@ -1,0 +1,10 @@
+<div class="field{% if field.errors %} has-error{% endif %}{% if field.field.widget.input_type == 'checkbox' %} field-check{% endif %}">
+  {% if field.field.widget.input_type == 'checkbox' %}
+    <label>{{ field }} {{ field.label|capfirst }}</label>
+  {% else %}
+    <label for="{{ field.id_for_label }}">{{ field.label|capfirst }}</label>
+    {{ field }}
+  {% endif %}
+  {% if field.help_text %}<small class="hint">{{ field.help_text }}</small>{% endif %}
+  {{ field.errors }}
+</div>

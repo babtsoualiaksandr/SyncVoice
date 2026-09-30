@@ -9,8 +9,17 @@
 <body>
   <header class="topbar">
     <a class="brand" href="{% url 'player:index' %}">SyncVoice</a>
+    <nav>
+      <a href="{% url 'player:index' %}">Звонки</a>
+      <a href="{% url 'player:settings' %}">Настройки</a>
+    </nav>
   </header>
-  <main class="page">
+  <main class="page {% block page_class %}{% endblock %}">
+    {% if messages %}
+      {% for message in messages %}
+        <p class="flash flash-{{ message.tags }}">{{ message }}</p>
+      {% endfor %}
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
   {% block scripts %}{% endblock %}

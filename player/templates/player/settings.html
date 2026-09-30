@@ -1,0 +1,64 @@
+{% extends 'player/base.html' %}
+
+{% block title %}Настройки — SyncVoice{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>Настройки</h1>
+  <form class="settings-form" method="post" novalidate>
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+
+    <fieldset>
+      <legend>Доступ к АТС (FreePBX)</legend>
+      {% for field in form %}
+        {% if field.name in 'pbx_url pbx_username pbx_password pbx_verify_ssl' %}
+          {% include 'player/_field.html' %}
+        {% endif %}
+      {% endfor %}
+      <div class="inline-form">
+        <button class="btn" type="button" id="test-connection" data-url="{% url 'player:test_connection' %}">
+          Проверить подключение
+        </button>
+        <span class="hint" id="test-result" role="status"></span>
+      </div>
+      <p class="hint">Проверяется сохранённое подключение — сначала сохраните изменения.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Контроль</legend>
+      {% for field in form %}
+        {% if field.name in 'controller min_duration interviewers' %}
+          {% include 'player/_field.html' %}
+        {% endif %}
+      {% endfor %}
+    </fieldset>
+
+    <button class="btn btn-primary" type="submit">Сохранить</button>
+  </form>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (() => {
+    const btn = document.getElementById('test-connection');
+    const out = document.getElementById('test-result');
+    const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      out.textContent = 'Подключаюсь…';
+      try {
+        const res = await fetch(btn.dataset.url, { method: 'POST', headers: { 'X-CSRFToken': csrf } });
+        const data = await res.json();
+        out.textContent = data.message;
+        out.className = data.ok ? 'ok-text' : 'error-text';
+      } catch (e) {
+        out.textContent = 'Не удалось выполнить проверку.';
+        out.className = 'error-text';
+      }
+      btn.disabled = false;
+    });
+  })();
+</script>
+{% endblock %}
