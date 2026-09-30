@@ -1,0 +1,114 @@
+{% extends 'player/base.html' %}
+{% load static %}
+
+{% block title %}{% if audio.call_id %}{{ audio.phone_display }}{% else %}{{ audio }}{% endif %} — SyncVoice{% endblock %}
+
+{% block content %}
+<div class="player-head">
+  {% if audio.call_id %}
+    <div>
+      <h1>{{ audio.phone_display }}</h1>
+      <dl class="call-info">
+        <div><dt>Оператор</dt><dd>{{ audio.operator }}</dd></div>
+        <div><dt>Дата</dt><dd>{{ audio.call_started_at|date:"d.m.Y" }}</dd></div>
+        <div><dt>Время</dt><dd>{{ audio.call_started_at|time:"H:i:s" }}</dd></div>
+        {% if audio.duration %}<div><dt>Длительность</dt><dd>{{ audio.duration|floatformat:0 }} с</dd></div>{% endif %}
+      </dl>
+    </div>
+  {% else %}
+    <h1>{{ audio }}</h1>
+  {% endif %}
+  <div class="player-actions">
+    <span id="status" class="status status-{{ audio.status }}">{{ audio.get_status_display }}</span>
+    <form method="post" action="{% url 'player:retranscribe' audio.pk %}">
+      {% csrf_token %}
+      <button class="btn" type="submit">Распознать заново</button>
+    </form>
+    <form method="post" action="{% url 'player:delete' audio.pk %}" id="delete-form">
+      {% csrf_token %}
+      <button class="btn btn-danger" type="submit" id="delete-btn">Удалить</button>
+    </form>
+  </div>
+</div>
+
+<section class="card player" id="player"
+         data-stream-url="{% url 'player:stream' audio.pk %}"
+         data-subtitles-url="{% url 'player:subtitles' audio.pk %}"
+         {% if audio.duration %}data-duration="{{ audio.duration|stringformat:'f' }}"{% endif %}>
+  <audio id="audio" preload="metadata" src="{% url 'player:stream' audio.pk %}"></audio>
+
+  <div class="caption" id="caption" aria-live="polite"></div>
+
+  <div class="timeline" id="timeline" role="slider" tabindex="0"
+       aria-label="Позиция воспроизведения" aria-valuemin="0" aria-valuenow="0">
+    <div class="timeline-track">
+      <div class="timeline-buffered" id="buffered"></div>
+      <div class="timeline-segments" id="segment-marks"></div>
+      <div class="timeline-progress" id="progress"></div>
+      <div class="timeline-thumb" id="thumb"></div>
+    </div>
+    <div class="timeline-tooltip" id="tooltip" hidden></div>
+  </div>
+
+  <div class="time-row">
+    <span id="current-time">0:00</span>
+    <span id="duration">0:00</span>
+  </div>
+
+  <div class="controls">
+    <div class="controls-group">
+      <button class="icon-btn" id="prev-seg" title="Предыдущая фраза (↑)">⏮</button>
+      <button class="icon-btn" id="back" title="Назад 5 с (←)">−5</button>
+      <button class="icon-btn play" id="play" title="Играть / пауза (пробел)">▶</button>
+      <button class="icon-btn" id="forward" title="Вперёд 5 с (→)">+5</button>
+      <button class="icon-btn" id="next-seg" title="Следующая фраза (↓)">⏭</button>
+    </div>
+
+    <div class="controls-group speed" id="speed" role="group" aria-label="Скорость">
+      <button data-rate="0.5">0.5×</button>
+      <button data-rate="0.75">0.75×</button>
+      <button data-rate="1">1×</button>
+      <button data-rate="1.25">1.25×</button>
+      <button data-rate="1.5">1.5×</button>
+      <button data-rate="1.75">1.75×</button>
+      <button data-rate="2">2×</button>
+    </div>
+
+    <div class="controls-group">
+      <button class="toggle" id="loop-seg" aria-pressed="false" title="Повторять текущую фразу (L)">↻ Фраза</button>
+      <button class="icon-btn" id="mute" title="Звук (M)">🔊</button>
+      <input type="range" id="volume" min="0" max="1" step="0.05" value="1" aria-label="Громкость">
+    </div>
+  </div>
+  <p class="hint keys">Пробел — пауза · ←/→ — 5 с · ↑/↓ — фраза · [ ] — скорость · L — повтор фразы · M — звук</p>
+</section>
+
+<section class="card transcript-card">
+  <div class="transcript-head">
+    <h2>Субтитры</h2>
+    <input type="search" id="search" placeholder="Поиск по тексту…" aria-label="Поиск по субтитрам">
+    <button class="toggle" id="follow" aria-pressed="true" title="Прокручивать к текущей фразе">Следовать</button>
+    <details class="save-menu" id="save-menu" {% if audio.status != 'done' %}hidden{% endif %}>
+      <summary class="btn btn-primary">Сохранить субтитры</summary>
+      <div class="save-menu-list">
+        <a href="{% url 'player:download_subtitles' audio.pk 'txt' %}" download>
+          <strong>TXT</strong><span>Текст с временем, для чтения</span>
+        </a>
+        <a href="{% url 'player:download_subtitles' audio.pk 'srt' %}" download>
+          <strong>SRT</strong><span>Субтитры для видеоплееров</span>
+        </a>
+        <a href="{% url 'player:download_subtitles' audio.pk 'vtt' %}" download>
+          <strong>VTT</strong><span>Субтитры для браузеров (WebVTT)</span>
+        </a>
+      </div>
+    </details>
+  </div>
+  <div class="transcript" id="transcript">
+    <p class="hint" id="transcript-empty">Загрузка…</p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{% static 'player/player.js' %}"></script>
+{% endblock %}

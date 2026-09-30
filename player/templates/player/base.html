@@ -1,0 +1,18 @@
+{% load static %}<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SyncVoice{% endblock %}</title>
+  <link rel="stylesheet" href="{% static 'player/player.css' %}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{% url 'player:index' %}">SyncVoice</a>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,49 @@
+{% extends 'player/base.html' %}
+
+{% block content %}
+<section class="card">
+  <h1>Загрузить запись</h1>
+  <form class="upload" method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <label>
+      <span>WAV-файл</span>
+      {{ form.file }}
+      {{ form.file.errors }}
+    </label>
+    <label>
+      <span>Название</span>
+      {{ form.title }}
+      {{ form.title.errors }}
+    </label>
+    <button class="btn btn-primary" type="submit">Загрузить и распознать</button>
+  </form>
+  <p class="hint">После загрузки Whisper распознает речь и сделает субтитры. На CPU это занимает от десятков секунд до нескольких минут.</p>
+</section>
+
+<section class="card">
+  <h2>Записи</h2>
+  {% if audio_files %}
+    <ul class="audio-list">
+      {% for audio in audio_files %}
+        <li>
+          {% if audio.call_id %}
+            <a class="call" href="{{ audio.get_absolute_url }}">
+              <span class="call-phone">{{ audio.phone_display }}</span>
+              <span class="call-details">Оператор {{ audio.operator }} · {{ audio.call_started_at|date:"d.m.Y" }} · {{ audio.call_started_at|time:"H:i:s" }}</span>
+            </a>
+          {% else %}
+            <a href="{{ audio.get_absolute_url }}">{{ audio }}</a>
+          {% endif %}
+          <span class="meta">
+            {% if audio.duration %}{{ audio.duration|floatformat:0 }} с · {% endif %}
+            <span class="status status-{{ audio.status }}">{{ audio.get_status_display }}</span>
+          </span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="hint">Пока нет записей.</p>
+  {% endif %}
+</section>
+{% endblock %}
