@@ -5,17 +5,24 @@ import tempfile
 import wave
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
+import httpx
 import openpyxl
+from django import forms
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from . import report, worker
+from google.genai import errors as genai_errors
+
+from . import analysis, report, stations, worker
+from .analysis import SuggestedFields
+from . import forms as forms_module
 from .forms import SettingsForm
-from .models import AppSettings, AudioFile, CallReview, Interviewer, PbxSync, Segment, parse_call_name
+from .models import AppSettings, AudioFile, CallAnalysis, CallReview, RadioStation, Interviewer, PbxSync, Segment, parse_call_name
 from .pbx import FreePbxClient, PbxError, Recording, parse_cdr_csv
 from .sync import run_sync
 
@@ -488,3 +495,247 @@ class SettingsFormTests(TestCase):
         form = SettingsForm({'min_duration': 30, 'interviewers': 'Марина'}, instance=AppSettings.load())
         self.assertFalse(form.is_valid())
         self.assertIn('Строка 1', str(form.errors))
+
+
+class FakeGemini:
+    """Stands in for google.genai.Client: returns `result` or raises it."""
+
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+        self.models = self
+
+    def generate_content(self, **kwargs):
+        self.calls.append(kwargs)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return SimpleNamespace(
+            parsed=self.result, text='',
+            usage_metadata=SimpleNamespace(prompt_token_count=900, candidates_token_count=60, thoughts_token_count=40),
+        )
+
+
+SUGGESTION = SuggestedFields(city='Минск', listen_city='', stations='Русское', notes='Слушала вчера на работе.')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-test')
+class AnalysisTests(TestCase):
+    def setUp(self):
+        RadioStation.objects.create(name='Радио Юнистар', report_name='Юнистар', aliases='Unistar Radio',
+                                    frequencies={'Минск': '99.5'})
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=self.audio, index=0, start=16, end=18, text='Вы в каком городе проживаете? Минск.')
+        Segment.objects.create(audio=self.audio, index=1, start=75, end=80, text='Вчера слушала Русское радио.')
+
+    def analyse(self, result):
+        analysis.queue(self.audio)
+        item = self.audio.analysis
+        fake = FakeGemini(result)
+        analysis.run_analysis(item, client=fake)
+        item.refresh_from_db()
+        return item, fake
+
+    def test_fields_saved(self):
+        item, fake = self.analyse(SUGGESTION)
+        self.assertEqual(item.status, CallAnalysis.Status.DONE)
+        self.assertEqual((item.city, item.listen_city, item.stations), ('Минск', '', 'Русское'))
+        self.assertEqual((item.input_tokens, item.output_tokens), (900, 100))
+        self.assertEqual(item.model_name, 'gemini-test')
+        request = fake.calls[0]
+        self.assertEqual(request['model'], 'gemini-test')
+        self.assertIn('[00:16] Вы в каком городе проживаете? Минск.', request['contents'])
+        self.assertIn('- «Юнистар»; также: Радио Юнистар, Unistar Radio; частоты: Минск 99.5',
+                      request['config'].system_instruction)  # station directory
+
+    def test_only_transcript_is_sent(self):
+        _, fake = self.analyse(SUGGESTION)
+        sent = fake.calls[0]['contents'] + fake.calls[0]['config'].system_instruction
+        self.assertNotIn(self.audio.phone, sent)
+        self.assertNotIn('308', sent)
+
+    def test_rejected_request_is_an_error(self):
+        item, _ = self.analyse(genai_errors.ClientError(400, {'error': {'code': 400, 'message': 'API key not valid'}}))
+        self.assertEqual(item.status, CallAnalysis.Status.ERROR)
+        self.assertIn('API key not valid', item.error)
+
+    def test_temporary_failures_are_retried(self):
+        for exc in [
+            genai_errors.ClientError(429, {'error': {'code': 429, 'message': 'Resource exhausted'}}),
+            genai_errors.ServerError(503, {'error': {'code': 503, 'message': 'Overloaded'}}),
+            httpx.ConnectError('proxy refused'),
+        ]:
+            with self.subTest(exc=type(exc).__name__), self.assertRaises(analysis.RetryLater):
+                self.analyse(exc)
+            self.assertEqual(self.audio.analysis.status, CallAnalysis.Status.PENDING)
+
+    def test_review_form_prefilled_from_suggestion(self):
+        self.analyse(SUGGESTION)
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, 'name="city" value="Минск"', html=False)
+        self.assertContains(r, 'value="Русское"')
+        self.assertContains(r, 'id="ai-panel"')
+
+    def test_existing_review_is_not_overwritten(self):
+        CallReview.objects.create(audio=self.audio, city='Брест')
+        self.analyse(SUGGESTION)
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, 'name="city" value="Брест"', html=False)
+
+    def test_run_button_queues(self):
+        r = self.client.post(reverse('player:analysis', args=[self.audio.pk]))
+        self.assertEqual(r.json()['analysis']['status'], 'pending')
+
+    @override_settings(GEMINI_API_KEY='')
+    def test_disabled_without_key(self):
+        r = self.client.post(reverse('player:analysis', args=[self.audio.pk]))
+        self.assertEqual(r.status_code, 400)
+        self.assertNotContains(self.client.get(self.audio.get_absolute_url()), 'id="ai-panel"')
+
+    def test_worker_queues_after_transcription_and_analyses(self):
+        pending = make_call(CALL_B)
+        def fake_transcribe(audio):
+            Segment.objects.create(audio=audio, index=0, start=0, end=2, text='Минск.')
+            AudioFile.objects.filter(pk=audio.pk).update(status='done')
+
+        with mock.patch('player.worker.transcribe', side_effect=fake_transcribe):
+            self.assertTrue(worker.run_once())
+        self.assertEqual(pending.analysis.status, CallAnalysis.Status.PENDING)
+        with mock.patch('player.analysis.make_client', return_value=FakeGemini(SUGGESTION)):
+            self.assertTrue(worker.run_once())
+        pending.analysis.refresh_from_db()
+        self.assertEqual(pending.analysis.status, CallAnalysis.Status.DONE)
+
+    def test_worker_backs_off_on_temporary_failure(self):
+        analysis.queue(self.audio)
+        failing = FakeGemini(httpx.ConnectError('down'))
+        with mock.patch('player.analysis.make_client', return_value=failing):
+            self.assertFalse(worker.run_analysis_step())
+            self.assertFalse(worker.run_analysis_step())  # paused: no second request
+        self.assertEqual(len(failing.calls), 1)
+        self.assertIn('down', CallAnalysis.objects.get().error)
+        worker._analysis_paused_until = 0
+
+
+class ProxyTests(TestCase):
+    @override_settings(GEMINI_PROXY_URL='http://10.0.0.5:3128', GEMINI_PROXY_USERNAME='admin',
+                       GEMINI_PROXY_PASSWORD='p@ss:w/rd')
+    def test_credentials_are_escaped(self):
+        self.assertEqual(analysis.proxy_url(), 'http://admin:p%40ss%3Aw%2Frd@10.0.0.5:3128')
+
+    @override_settings(GEMINI_PROXY_URL='')
+    def test_no_proxy(self):
+        self.assertIsNone(analysis.proxy_url())
+
+    @override_settings(GEMINI_API_KEY='k', GEMINI_PROXY_URL='http://10.0.0.5:3128',
+                       GEMINI_PROXY_USERNAME='', GEMINI_PROXY_PASSWORD='')
+    def test_client_uses_proxy_only_for_gemini(self):
+        with mock.patch('google.genai.Client') as client_cls:
+            analysis.make_client()
+        options = client_cls.call_args.kwargs['http_options']
+        self.assertEqual(options.client_args, {'trust_env': False, 'proxy': 'http://10.0.0.5:3128'})
+        self.assertEqual(client_cls.call_args.kwargs['api_key'], 'k')
+
+
+def make_stations_xlsx() -> io.BytesIO:
+    """A small workbook in the format of «Список РСТ с частотами.xlsx»."""
+    wb = openpyxl.Workbook()
+    master = wb.active
+    master.title = 'без англ'
+    master.append([None, None, 'Минск', 'Брест', 'Витебск', 'Гомель', 'Гродно', 'Могилев', None])
+    master.append([1, 'Юмор FM', 93.7, 87.5, 96.2, 92.1, 89.9, 91.9, None])
+    master.append([2, 'Культура', 102.9, 88.5, 99.3, 91.5, '95.0', 99.1, None])
+    master.append([3, 'Супер FM', 104.6, 96.4, None, '91.0', None, None, 'Ранее Би-Эй'])
+    master.append([4, 'Правда Радио Гомель', None, None, ' ', '99.0', None, None, None])
+    minsk = wb.create_sheet('Минск')
+    minsk.append([30, 'Humor FM', 'Юмор FM', '93,7'])
+    minsk.append([2, 'Kultura', 'Культура', '102,9'])
+    minsk.append([None, 'добавились ретро фм', None, None])  # comment row
+    gomel = wb.create_sheet('Гомель')
+    gomel.append([20, 'Pravda Radio', 'Правда Радио', '99,0'])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+class StationDirectoryTests(TestCase):
+    def test_import(self):
+        created, updated = stations.import_workbook(make_stations_xlsx())
+        self.assertEqual((created, updated), (4, 0))
+        humor = RadioStation.objects.get(name='Юмор FM')
+        self.assertEqual(humor.report_name, 'Юмор')  # as controllers write it
+        self.assertEqual(humor.alias_list(), ['Humor FM'])
+        self.assertEqual(humor.frequencies['Гродно'], '89.9')
+        culture = RadioStation.objects.get(name='Культура')
+        self.assertEqual(culture.frequencies['Гродно'], '95.0')
+        self.assertEqual(culture.report_name, '')
+        self.assertEqual(RadioStation.objects.get(name='Правда Радио Гомель').alias_list(),
+                         ['Правда Радио', 'Pravda Radio'])  # matched by similar name
+        self.assertEqual(RadioStation.objects.get(name='Супер FM').note, 'Ранее Би-Эй')
+        self.assertNotIn('Витебск', RadioStation.objects.get(name='Правда Радио Гомель').frequencies)
+
+    def test_reimport_keeps_manual_edits(self):
+        stations.import_workbook(make_stations_xlsx())
+        humor = RadioStation.objects.get(name='Юмор FM')
+        humor.report_name = 'Юмор ФМ'
+        humor.aliases = 'Humor FM; Юморина'
+        humor.active = False
+        humor.frequencies = {}
+        humor.save()
+        self.assertEqual(stations.import_workbook(make_stations_xlsx()), (0, 4))
+        humor.refresh_from_db()
+        self.assertEqual((humor.report_name, humor.aliases, humor.active), ('Юмор ФМ', 'Humor FM; Юморина', False))
+        self.assertEqual(humor.frequencies['Минск'], '93.7')  # frequencies come from the file
+
+    def test_prompt_block_uses_report_names_and_skips_inactive(self):
+        stations.import_workbook(make_stations_xlsx())
+        RadioStation.objects.filter(name='Культура').update(active=False)
+        block = stations.prompt_block()
+        self.assertIn('- «Юмор»; также: Юмор FM, Humor FM; частоты: Минск 93.7, Брест 87.5', block)
+        self.assertIn('примечание: Ранее Би-Эй', block)
+        self.assertNotIn('Культура', block)
+        self.assertEqual(stations.answer_names(), ['Правда Радио Гомель', 'Супер FM', 'Юмор'])
+
+    def test_page_edit_and_add(self):
+        stations.import_workbook(make_stations_xlsx())
+        page = self.client.get(reverse('player:stations'))
+        self.assertContains(page, 'value="Юмор FM"')
+        formset = page.context['formset']
+        data = {
+            'form-TOTAL_FORMS': str(len(formset.forms)), 'form-INITIAL_FORMS': str(formset.initial_form_count()),
+            'form-MIN_NUM_FORMS': '0', 'form-MAX_NUM_FORMS': '1000',
+        }
+        for i, form in enumerate(formset.forms):
+            for name, field in form.fields.items():
+                value = form.initial.get(name, field.initial)
+                if isinstance(field, forms.BooleanField):
+                    if value:
+                        data[f'form-{i}-{name}'] = 'on'
+                elif value is not None and name != 'DELETE':
+                    data[f'form-{i}-{name}'] = value.pk if hasattr(value, 'pk') else value
+        humor_i = next(i for i, f in enumerate(formset.forms) if f.instance.name == 'Юмор FM')
+        data[f'form-{humor_i}-freq_Минск'] = '93,8'
+        new_i = len(formset.forms) - 1
+        data[f'form-{new_i}-name'] = 'Радио Новинка'
+        data[f'form-{new_i}-freq_Брест'] = '101.1'
+        data[f'form-{new_i}-active'] = 'on'
+        r = self.client.post(reverse('player:stations'), data)
+        self.assertRedirects(r, reverse('player:stations'))
+        self.assertEqual(RadioStation.objects.get(name='Юмор FM').frequencies['Минск'], '93.8')
+        self.assertEqual(RadioStation.objects.get(name='Радио Новинка').frequencies, {'Брест': '101.1'})
+
+    def test_bad_frequency(self):
+        form = forms_module.StationForm(data={'name': 'X', 'freq_Минск': 'сто три', 'active': 'on'})
+        self.assertFalse(form.is_valid())
+        self.assertIn('freq_Минск', form.errors)
+
+    def test_import_via_page(self):
+        upload = ContentFile(make_stations_xlsx().getvalue(), name='РСТ.xlsx')
+        r = self.client.post(reverse('player:stations_import'), {'file': upload}, follow=True)
+        self.assertContains(r, 'Импорт: добавлено 4, обновлено 0.')
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_review_form_suggests_report_names(self):
+        stations.import_workbook(make_stations_xlsx())
+        audio = make_call(CALL_A)
+        self.assertContains(self.client.get(audio.get_absolute_url()), '<option value="Юмор">')

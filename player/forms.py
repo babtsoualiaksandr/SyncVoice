@@ -3,7 +3,7 @@ from pathlib import Path
 
 from django import forms
 
-from .models import AppSettings, AudioFile, CallReview, Interviewer, parse_call_name
+from .models import CITIES, AppSettings, AudioFile, CallReview, Interviewer, RadioStation, parse_call_name
 
 
 class AudioUploadForm(forms.ModelForm):
@@ -109,3 +109,61 @@ class ReviewForm(forms.ModelForm):
             'note': forms.Textarea(attrs={'rows': 2}),
             'result': forms.RadioSelect,
         }
+
+
+_FREQ_RE = re.compile(r'^\d{2,3}([.,]\d{1,2})?$')
+
+
+class StationForm(forms.ModelForm):
+    """One row of the station directory; frequencies are one field per city."""
+
+    class Meta:
+        model = RadioStation
+        fields = ['name', 'report_name', 'aliases', 'note', 'active']
+        widgets = {
+            'aliases': forms.Textarea(attrs={'rows': 1}),
+            'note': forms.Textarea(attrs={'rows': 1}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        freqs = self.instance.frequencies or {}
+        for city in CITIES:
+            self.fields[f'freq_{city}'] = forms.CharField(
+                label=city, required=False, initial=freqs.get(city, ''),
+                widget=forms.TextInput(attrs={'inputmode': 'decimal', 'size': 5}),
+            )
+
+    def freq_fields(self):
+        return [self[f'freq_{city}'] for city in CITIES]
+
+    def clean(self):
+        cleaned = super().clean()
+        freqs = {}
+        for city in CITIES:
+            value = (cleaned.get(f'freq_{city}') or '').strip()
+            if not value:
+                continue
+            if not _FREQ_RE.match(value):
+                self.add_error(f'freq_{city}', 'Частота вида 107.9')
+                continue
+            freqs[city] = value.replace(',', '.')
+        cleaned['frequencies'] = freqs
+        return cleaned
+
+    def save(self, commit=True):
+        self.instance.frequencies = self.cleaned_data['frequencies']
+        return super().save(commit)
+
+
+StationFormSet = forms.modelformset_factory(RadioStation, form=StationForm, extra=1, can_delete=True)
+
+
+class StationImportForm(forms.Form):
+    file = forms.FileField(label='Файл .xlsx', widget=forms.ClearableFileInput(attrs={'accept': '.xlsx'}))
+
+    def clean_file(self):
+        f = self.cleaned_data['file']
+        if Path(f.name).suffix.lower() != '.xlsx':
+            raise forms.ValidationError('Нужен файл .xlsx')
+        return f

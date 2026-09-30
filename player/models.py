@@ -232,3 +232,68 @@ class CallReview(models.Model):
 
     def __str__(self):
         return f'{self.audio} — {self.result or "не проверен"}'
+
+
+class CallAnalysis(models.Model):
+    """Fields suggested by an LLM from the transcript, for the controller to check."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'В очереди'
+        DONE = 'done', 'Готово'
+        ERROR = 'error', 'Ошибка'
+
+    audio = models.OneToOneField(AudioFile, on_delete=models.CASCADE, related_name='analysis')
+    status = models.CharField('статус', max_length=16, choices=Status, default=Status.PENDING)
+    city = models.CharField('город проживания', max_length=100, blank=True)
+    listen_city = models.CharField('город слушания', max_length=100, blank=True)
+    stations = models.CharField('радиостанции / не слушал', max_length=255, blank=True)
+    notes = models.TextField('пояснение', blank=True)
+    model_name = models.CharField('модель', max_length=64, blank=True)
+    input_tokens = models.PositiveIntegerField('токенов на входе', default=0)
+    output_tokens = models.PositiveIntegerField('токенов на выходе', default=0)
+    error = models.TextField('ошибка', blank=True)
+    updated_at = models.DateTimeField('изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'анализ ИИ'
+        verbose_name_plural = 'анализ ИИ'
+
+    def __str__(self):
+        return f'{self.audio} — {self.get_status_display()}'
+
+    FIELDS = ('city', 'listen_city', 'stations')
+
+
+CITIES = ['Минск', 'Брест', 'Витебск', 'Гомель', 'Гродно', 'Могилев']
+
+
+class RadioStation(models.Model):
+    """Station directory: used in the Gemini prompt and as suggestions in the review form."""
+
+    name = models.CharField('название', max_length=120, unique=True)
+    report_name = models.CharField(
+        'в отчёте', max_length=120, blank=True,
+        help_text='Как писать в колонку «Радиостанции» отчёта. Пусто — как название.',
+    )
+    aliases = models.TextField(
+        'другие названия', blank=True,
+        help_text='Через «;»: английское, прежнее, как говорят респонденты.',
+    )
+    frequencies = models.JSONField('частоты', default=dict, blank=True)  # {'Минск': '107.9', ...}
+    note = models.TextField('примечание', blank=True)
+    active = models.BooleanField('использовать', default=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name = 'радиостанция'
+        verbose_name_plural = 'радиостанции'
+
+    def __str__(self):
+        return self.name
+
+    @property
+    def answer_name(self) -> str:
+        return self.report_name or self.name
+
+    def alias_list(self) -> list[str]:
+        return [a.strip() for a in self.aliases.split(';') if a.strip()]

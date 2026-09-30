@@ -16,9 +16,14 @@ import sys
 from pathlib import Path
 
 import certifi
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Secrets and per-machine options (API keys, proxy) live in BASE_DIR/.env,
+# which is git-ignored; see .env.example. Real environment variables win.
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -154,6 +159,17 @@ if WHISPER_LANGUAGE == 'auto':
 # python.org builds of Python ship without root certificates, so downloading
 # Whisper models fails with CERTIFICATE_VERIFY_FAILED. Use certifi's bundle.
 os.environ.setdefault('SSL_CERT_FILE', certifi.where())
+
+
+# Gemini — suggests «Город проживания», «Город слушания», «Радиостанции»
+# from the transcript (player/analysis.py). Off while GEMINI_API_KEY is empty.
+# The proxy applies to Gemini requests only (not to the PBX or model downloads).
+
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.8-flash')
+GEMINI_PROXY_URL = os.environ.get('GEMINI_PROXY_URL', '')  # e.g. http://1.2.3.4:3128
+GEMINI_PROXY_USERNAME = os.environ.get('GEMINI_PROXY_USERNAME', '')
+GEMINI_PROXY_PASSWORD = os.environ.get('GEMINI_PROXY_PASSWORD', '')
 
 
 # Email

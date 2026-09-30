@@ -212,6 +212,8 @@ h2 { font-size: 1.15rem; }
 .speed button.active { background: var(--accent); border-color: var(--accent); color: #fff; position: relative; }
 
 .toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.toggle[aria-pressed="true"].paused { border-style: dashed; background: none; }
+.toggle.paused::after { content: " ⏸"; }
 
 #volume { width: 90px; accent-color: var(--accent); }
 
@@ -372,3 +374,43 @@ fieldset.result-field { border: 0; padding: 0; margin: 0 0 12px; }
 .settings-form fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px 4px; margin: 0 0 16px; }
 .settings-form legend { font-weight: 600; padding: 0 6px; }
 .settings-form .field input:not([type="checkbox"]), .settings-form .field textarea { max-width: 480px; }
+
+/* ---------- AI suggestions ---------- */
+
+.ai-panel {
+  border: 1px dashed var(--accent); border-radius: 10px;
+  padding: 8px 10px; margin-bottom: 12px; background: color-mix(in srgb, var(--accent-soft) 50%, transparent);
+}
+.ai-panel-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ai-panel-head .hint { margin: 0; flex: 1; min-width: 0; }
+.ai-notes { margin-top: 6px; }
+.btn-small { padding: 3px 10px; font-size: 0.85rem; }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.ai-hint { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-size: 0.85rem; color: var(--accent); }
+.link-btn {
+  font: inherit; color: var(--accent); background: none; border: 0; padding: 0;
+  text-decoration: underline; cursor: pointer;
+}
+
+/* ---------- stations ---------- */
+
+#station-filter {
+  font: inherit; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg); color: var(--text); flex: 1 1 200px; max-width: 320px;
+}
+table.stations { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+table.stations th { text-align: left; color: var(--muted); font-weight: 500; font-size: 0.8rem; padding: 4px 4px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.stations td { padding: 3px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.stations input[type="text"], table.stations textarea {
+  font: inherit; width: 100%; min-width: 9em; padding: 4px 6px; border: 1px solid transparent;
+  border-radius: 6px; background: transparent; color: var(--text); resize: vertical;
+}
+table.stations td:nth-child(2) input { min-width: 14em; }
+table.stations td:nth-child(4) textarea { min-width: 16em; }
+table.stations td.freq input { min-width: 4.5em; width: 4.5em; text-align: right; font-variant-numeric: tabular-nums; }
+table.stations input:hover, table.stations textarea:hover { border-color: var(--border); }
+table.stations input:focus, table.stations textarea:focus { border-color: var(--accent); background: var(--bg); }
+table.stations .center { text-align: center; vertical-align: middle; }
+table.stations tr.new-row td { background: var(--accent-soft); }
+table.stations tr.has-error td { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
+table.stations .errorlist { font-size: 0.8rem; }

@@ -1,0 +1,89 @@
+{% extends 'player/base.html' %}
+
+{% block title %}Радиостанции — SyncVoice{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h1>Радиостанции</h1>
+    <span class="hint">Всего {{ total }}, используется {{ active }}</span>
+  </div>
+  <p class="hint">
+    Справочник для подсказок ИИ: по названию, другим названиям и частоте в городе респондента
+    Gemini определяет станцию и пишет её так, как указано в колонке «В отчёте»
+    (пусто — как в «Названии»). Эти же названия подсказываются в поле «Радиостанции» формы контроля.
+    Снимите «Исп.», чтобы станция не попадала в подсказки.
+  </p>
+
+  <details class="mt">
+    <summary><strong>Загрузить из Excel</strong></summary>
+    <form class="inline-form" method="post" action="{% url 'player:stations_import' %}" enctype="multipart/form-data">
+      {% csrf_token %}
+      {{ import_form.file }}
+      <button class="btn" type="submit">Импортировать</button>
+    </form>
+    <p class="hint">Формат как «Список РСТ с частотами.xlsx»: первый лист — № | название | частоты по городам | примечание,
+      листы городов — другие названия. Новые станции добавляются; у имеющихся обновляются частоты и примечание,
+      ваши правки «В отчёте», «Других названий» и «Исп.» сохраняются.</p>
+  </details>
+</section>
+
+<form method="post" class="card" id="stations-form">
+  {% csrf_token %}
+  {{ formset.management_form }}
+  {% if formset.non_form_errors %}<p class="flash flash-error">{{ formset.non_form_errors|join:" " }}</p>{% endif %}
+
+  <div class="card-head">
+    <input type="search" id="station-filter" placeholder="Найти станцию…" aria-label="Найти станцию">
+    <button class="btn btn-primary" type="submit">Сохранить</button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="stations">
+      <thead>
+        <tr>
+          <th title="Использовать в подсказках">Исп.</th>
+          <th>Название</th>
+          <th>В отчёте</th>
+          <th>Другие названия (через ;)</th>
+          {% for city in cities %}<th class="freq">{{ city }}</th>{% endfor %}
+          <th>Примечание</th>
+          <th title="Удалить при сохранении">Удал.</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for form in formset %}
+          <tr class="{% if form.errors %}has-error{% endif %}{% if not form.instance.pk %} new-row{% endif %}">
+            <td class="center">{{ form.id }}{{ form.active }}</td>
+            <td>{{ form.name }}{{ form.name.errors }}{% if not form.instance.pk %}<small class="hint">новая станция</small>{% endif %}</td>
+            <td>{{ form.report_name }}</td>
+            <td>{{ form.aliases }}</td>
+            {% for field in form.freq_fields %}<td class="freq">{{ field }}{{ field.errors }}</td>{% endfor %}
+            <td>{{ form.note }}</td>
+            <td class="center">{% if form.instance.pk %}{{ form.DELETE }}{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">Чтобы добавить станцию, заполните последнюю строку и сохраните — появится следующая пустая.</p>
+  <button class="btn btn-primary" type="submit">Сохранить</button>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (() => {
+    const filter = document.getElementById('station-filter');
+    const rows = [...document.querySelectorAll('table.stations tbody tr:not(.new-row)')];
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      for (const row of rows) {
+        const text = [...row.querySelectorAll('input, textarea')].map((el) => el.value).join(' ').toLowerCase();
+        row.hidden = q && !text.includes(q);
+      }
+    });
+  })();
+</script>
+{% endblock %}

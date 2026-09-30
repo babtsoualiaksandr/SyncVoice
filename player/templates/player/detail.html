@@ -150,20 +150,38 @@
       </div>
     </div>
 
+    {% if ai_enabled %}
+    <div class="ai-panel" id="ai-panel" data-url="{% url 'player:analysis' audio.pk %}">
+      <div class="ai-panel-head">
+        <strong>Подсказка ИИ</strong>
+        <span class="hint" id="ai-status" role="status"></span>
+        <button class="btn btn-small" type="button" id="ai-run"
+                {% if audio.status != 'done' %}disabled title="Сначала дождитесь расшифровки"{% endif %}>
+          Заполнить с ИИ
+        </button>
+      </div>
+      <p class="hint ai-notes" id="ai-notes" hidden></p>
+    </div>
+    {{ ai|json_script:"ai-data" }}
+    {% endif %}
+
     <div class="field-row">
       <div class="field">
         <label for="{{ f.city.id_for_label }}">Город проживания</label>
         {{ f.city }}
+        <div class="ai-hint" data-ai-field="city" hidden></div>
       </div>
       <div class="field">
         <label for="{{ f.listen_city.id_for_label }}">Город слушания</label>
         {{ f.listen_city }}
+        <div class="ai-hint" data-ai-field="listen_city" hidden></div>
       </div>
     </div>
 
     <div class="field">
       <label for="{{ f.stations.id_for_label }}">Радиостанции / не слушал</label>
       {{ f.stations }}
+      <div class="ai-hint" data-ai-field="stations" hidden></div>
     </div>
 
     <fieldset class="field result-field">
@@ -225,6 +243,7 @@
 {% block scripts %}
 <script src="{% static 'player/player.js' %}"></script>
 <script src="{% static 'player/review.js' %}"></script>
+<script src="{% static 'player/ai.js' %}"></script>
 <script>
   // Alt+←/→ — previous/next call of the day.
   document.addEventListener('keydown', (e) => {

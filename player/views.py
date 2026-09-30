@@ -15,8 +15,10 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .audio_utils import wav_duration
 from .credentials import set_password
-from .forms import AudioUploadForm, ReviewForm, SettingsForm
-from .models import AppSettings, AudioFile, CallReview, Interviewer, PbxSync, parse_call_name
+from .forms import AudioUploadForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
+from . import analysis
+from . import stations as station_directory
+from .models import CITIES as STATION_CITIES, AppSettings, AudioFile, CallAnalysis, CallReview, Interviewer, PbxSync, RadioStation, parse_call_name
 from .pbx import PbxError
 from .report import build_report, calls_for_day, report_filename
 from .subtitle_formats import FORMATS, export_filename
@@ -126,6 +128,38 @@ def settings_view(request):
     return render(request, 'player/settings.html', {'form': form})
 
 
+def stations_view(request):
+    """Radio station directory: edit, add, delete (used by the AI prompt and form hints)."""
+    formset = StationFormSet(request.POST or None, queryset=RadioStation.objects.all())
+    if request.method == 'POST' and formset.is_valid():
+        formset.save()
+        messages.success(request, 'Радиостанции сохранены.')
+        return redirect('player:stations')
+    return render(request, 'player/stations.html', {
+        'formset': formset,
+        'import_form': StationImportForm(),
+        'cities': STATION_CITIES,
+        'total': RadioStation.objects.count(),
+        'active': RadioStation.objects.filter(active=True).count(),
+    })
+
+
+@require_POST
+def stations_import(request):
+    form = StationImportForm(request.POST, request.FILES)
+    if form.is_valid():
+        try:
+            created, updated = station_directory.import_workbook(form.cleaned_data['file'])
+        except Exception as exc:  # malformed workbook: openpyxl raises many kinds
+            messages.error(request, f'Не удалось прочитать файл: {exc}')
+        else:
+            messages.success(request, f'Импорт: добавлено {created}, обновлено {updated}.')
+    else:
+        for error in form.errors.get('file', []):
+            messages.error(request, error)
+    return redirect('player:stations')
+
+
 @require_POST
 def test_connection(request):
     try:
@@ -160,7 +194,26 @@ def _review_form(audio, data=None):
             'controller': AppSettings.load().controller,
             'review_date': timezone.localdate(),
         }
+        suggestion = _analysis_of(audio)
+        if suggestion and suggestion.status == CallAnalysis.Status.DONE:
+            initial.update({f: getattr(suggestion, f) for f in CallAnalysis.FIELDS})
     return ReviewForm(data, instance=review or CallReview(audio=audio), initial=initial), review
+
+
+def _analysis_of(audio):
+    return CallAnalysis.objects.filter(audio=audio).first()
+
+
+def _analysis_json(item):
+    if not item:
+        return None
+    return {
+        'status': item.status,
+        'status_display': item.get_status_display(),
+        'fields': {f: getattr(item, f) for f in CallAnalysis.FIELDS},
+        'notes': item.notes,
+        'error': item.error,
+    }
 
 
 def detail(request, pk):
@@ -174,11 +227,25 @@ def detail(request, pk):
         'review': review,
         'interviewer_choices': _interviewer_choices(audio),
         'cities': CITIES,
-        'stations': list(dict.fromkeys([*STATIONS, *used_stations])),
+        'stations': [s for s in dict.fromkeys([*STATIONS, *station_directory.answer_names(), *used_stations]) if s],
+        'ai_enabled': analysis.enabled(),
+        'ai': _analysis_json(_analysis_of(audio)),
         'prev_call': prev_call,
         'next_call': next_call,
         'next_unreviewed': next_unreviewed,
     })
+
+
+def analysis_status(request, pk):
+    """GET: AI suggestion for the call (polled). POST: (re)run the analysis."""
+    audio = get_object_or_404(AudioFile, pk=pk)
+    if request.method == 'POST':
+        if not analysis.enabled():
+            return JsonResponse({'ok': False, 'message': 'Не задан GEMINI_API_KEY в файле .env'}, status=400)
+        if audio.status != AudioFile.Status.DONE:
+            return JsonResponse({'ok': False, 'message': 'Сначала дождитесь расшифровки.'}, status=400)
+        analysis.queue(audio)
+    return JsonResponse({'ok': True, 'analysis': _analysis_json(_analysis_of(audio))})
 
 
 def _interviewer_choices(audio):

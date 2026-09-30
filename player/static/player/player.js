@@ -30,6 +30,7 @@
   let loopIndex = -1;
   let dragging = false;
   let followPausedUntil = 0;
+  let programmaticScrollUntil = 0;
 
   // ---------- helpers ----------
 
@@ -108,7 +109,7 @@
     i = Math.max(0, Math.min(segments.length - 1, i));
     if (loopIndex >= 0) loopIndex = i;
     seek(segments[i].start);
-    followPausedUntil = 0;
+    resumeFollow(); // jumping to a phrase means "take me there"
     if (play) audio.play();
   }
 
@@ -165,14 +166,21 @@
     const row = rows[i];
     if (!row) return;
     row.classList.add('active');
-    if (els.follow.getAttribute('aria-pressed') === 'true' && Date.now() > followPausedUntil) {
-      scrollToRow(row);
-    }
+    if (following()) scrollToRow(row);
+  }
+
+  function following() {
+    return els.follow.getAttribute('aria-pressed') === 'true' && Date.now() > followPausedUntil;
   }
 
   function scrollToRow(row) {
+    if (row.hidden) return; // filtered out by search
     const box = els.transcript;
-    const top = row.offsetTop - box.offsetTop - box.clientHeight / 3;
+    // Measure on screen rather than via offsetTop, which depends on the
+    // offsetParent: put the line a third of the way down the box.
+    const offset = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    const top = box.scrollTop + offset - box.clientHeight / 3;
+    programmaticScrollUntil = Date.now() + 1000; // our smooth scroll isn't the user's
     box.scrollTo({ top, behavior: 'smooth' });
   }
 
@@ -237,6 +245,8 @@
     } else if (none) {
       none.remove();
     }
+    // Search cleared: bring the current line back into view.
+    if (!q && following() && rows[activeIndex]) scrollToRow(rows[activeIndex]);
   }
 
   // ---------- subtitles loading ----------
@@ -357,16 +367,39 @@
     const row = e.target.closest('.line');
     if (row) gotoSegment(Number(row.dataset.index));
   });
-  // Manual scrolling pauses auto-follow for a few seconds.
-  const pauseFollow = () => { followPausedUntil = Date.now() + 4000; };
+  // Manual scrolling (wheel, touch, scrollbar drag, keys) pauses auto-follow
+  // for a few seconds; the follow button shows it and resumes on click.
+  const FOLLOW_PAUSE = 4000;
+  let resumeTimer = null;
+  function pauseFollow() {
+    if (els.follow.getAttribute('aria-pressed') !== 'true') return;
+    followPausedUntil = Date.now() + FOLLOW_PAUSE;
+    els.follow.classList.add('paused');
+    els.follow.title = 'Прокрутка на паузе — нажмите, чтобы вернуться к текущей фразе';
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(resumeFollow, FOLLOW_PAUSE);
+  }
+  function resumeFollow() {
+    clearTimeout(resumeTimer);
+    followPausedUntil = 0;
+    els.follow.classList.remove('paused');
+    els.follow.title = 'Прокручивать к текущей фразе';
+    if (following() && rows[activeIndex]) scrollToRow(rows[activeIndex]);
+  }
   els.transcript.addEventListener('wheel', pauseFollow, { passive: true });
   els.transcript.addEventListener('touchmove', pauseFollow, { passive: true });
+  els.transcript.addEventListener('scroll', () => {
+    if (Date.now() > programmaticScrollUntil) pauseFollow();
+  }, { passive: true });
 
   els.follow.addEventListener('click', () => {
-    const on = els.follow.getAttribute('aria-pressed') !== 'true';
-    els.follow.setAttribute('aria-pressed', String(on));
-    followPausedUntil = 0;
-    if (on && rows[activeIndex]) scrollToRow(rows[activeIndex]);
+    const on = els.follow.getAttribute('aria-pressed') === 'true';
+    if (on && followPausedUntil > Date.now()) {
+      resumeFollow(); // paused by manual scrolling: jump back instead of switching off
+      return;
+    }
+    els.follow.setAttribute('aria-pressed', String(!on));
+    resumeFollow();
   });
   els.search.addEventListener('input', applySearch);
 
