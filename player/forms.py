@@ -3,23 +3,45 @@ from pathlib import Path
 
 from django import forms
 
-from .models import AppSettings, AudioFile, CallReview, Interviewer
+from .models import AppSettings, AudioFile, CallReview, Interviewer, parse_call_name
 
 
 class AudioUploadForm(forms.ModelForm):
+    """Manual upload. Call details come from a PBX-style file name; for other
+    names the call date must be entered, or the call would appear in no day
+    and no report."""
+
     class Meta:
         model = AudioFile
-        fields = ['file', 'title']
+        fields = ['file', 'call_started_at', 'operator', 'phone', 'title']
         widgets = {
             'file': forms.ClearableFileInput(attrs={'accept': '.wav,audio/wav,audio/x-wav'}),
+            'call_started_at': forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
+            'operator': forms.TextInput(attrs={'placeholder': 'например, 308', 'inputmode': 'numeric'}),
+            'phone': forms.TextInput(attrs={'placeholder': '375291234567', 'inputmode': 'numeric'}),
             'title': forms.TextInput(attrs={'placeholder': 'Необязательно — возьмём из имени файла'}),
         }
+        labels = {'operator': 'внутр. номер интервьюера'}
 
     def clean_file(self):
         f = self.cleaned_data['file']
         if Path(f.name).suffix.lower() != '.wav':
             raise forms.ValidationError('Поддерживаются только файлы .wav')
         return f
+
+    def clean_phone(self):
+        return re.sub(r'\D', '', self.cleaned_data['phone'])
+
+    def clean(self):
+        cleaned = super().clean()
+        f = cleaned.get('file')
+        if f and not parse_call_name(f.name) and not cleaned.get('call_started_at'):
+            self.add_error(
+                'call_started_at',
+                'Имя файла не в формате АТС — укажите дату и время звонка, '
+                'иначе запись не попадёт ни в один день и отчёт.',
+            )
+        return cleaned
 
 
 _INTERVIEWER_LINE_RE = re.compile(r'^\s*(\d+)\s+(.+?)\s*$')

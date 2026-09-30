@@ -73,13 +73,20 @@
 {% endif %}
 
 <section class="card">
-  <details>
+  <details id="upload" {% if upload_form.errors %}open{% endif %}>
     <summary><strong>Добавить WAV-файл вручную</strong></summary>
     <form class="upload" method="post" action="{% url 'player:upload' %}" enctype="multipart/form-data">
       {% csrf_token %}
-      <label><span>WAV-файл</span>{{ upload_form.file }}</label>
-      <label><span>Название</span>{{ upload_form.title }}</label>
-      <button class="btn" type="submit">Загрузить</button>
+      {% with field=upload_form.file %}{% include 'player/_field.html' %}{% endwith %}
+      <p class="hint">Если имя файла из АТС (<code>out-номер-внутр-ГГГГММДД-ЧЧММСС-….wav</code>),
+        дата, телефон и внутр. номер возьмутся из него. Для других файлов укажите их ниже.</p>
+      <div class="field-row">
+        {% with field=upload_form.call_started_at %}{% include 'player/_field.html' %}{% endwith %}
+        {% with field=upload_form.operator %}{% include 'player/_field.html' %}{% endwith %}
+        {% with field=upload_form.phone %}{% include 'player/_field.html' %}{% endwith %}
+      </div>
+      {% with field=upload_form.title %}{% include 'player/_field.html' %}{% endwith %}
+      <button class="btn btn-primary" type="submit">Загрузить и распознать</button>
     </form>
   </details>
   {% if other_audio %}

@@ -240,12 +240,16 @@ h2 { font-size: 1.15rem; }
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
   display: grid;
 }
-.save-menu-list a {
+.save-menu-list a, .save-menu-list button {
   display: grid; gap: 1px; padding: 8px 10px; border-radius: 8px;
   text-decoration: none; color: var(--text);
+  font: inherit; text-align: left; background: none; border: 0; cursor: pointer;
 }
-.save-menu-list a:hover, .save-menu-list a:focus-visible { background: var(--accent-soft); }
+.save-menu-list button { border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; margin-bottom: 2px; }
+.save-menu-list a:hover, .save-menu-list a:focus-visible,
+.save-menu-list button:hover, .save-menu-list button:focus-visible { background: var(--accent-soft); }
 .save-menu-list span { color: var(--muted); font-size: 0.85rem; }
+.save-menu-list button.copied span { color: var(--ok); }
 
 @media (max-width: 560px) {
   .save-menu-list { left: 0; right: auto; }

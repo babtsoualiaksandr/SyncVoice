@@ -378,6 +378,58 @@
     if (els.saveMenu.open && !els.saveMenu.contains(e.target)) els.saveMenu.open = false;
   });
 
+  // Copy the TXT export (call details + timestamped lines) to the clipboard.
+  const copyBtn = $('copy-subtitles');
+  const copyHint = copyBtn.querySelector('span');
+  const copyHintDefault = copyHint.textContent;
+
+  async function copySubtitles() {
+    const textPromise = fetch(copyBtn.dataset.url).then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
+    });
+    if (navigator.clipboard && window.ClipboardItem) {
+      // Passing the pending text keeps the click's user activation
+      // (Safari rejects clipboard writes after an await).
+      const blob = textPromise.then((text) => new Blob([text], { type: 'text/plain' }));
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      return;
+    }
+    const text = await textPromise;
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    // Last resort for browsers without the Clipboard API.
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.append(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    if (!ok) throw new Error('execCommand failed');
+  }
+
+  copyBtn.addEventListener('click', async () => {
+    copyBtn.disabled = true;
+    try {
+      await copySubtitles();
+      copyHint.textContent = 'Скопировано ✓';
+      copyBtn.classList.add('copied');
+      setTimeout(() => { els.saveMenu.open = false; }, 900);
+    } catch (e) {
+      copyHint.textContent = 'Не удалось скопировать — скачайте TXT';
+    }
+    setTimeout(() => {
+      copyHint.textContent = copyHintDefault;
+      copyBtn.classList.remove('copied');
+      copyBtn.disabled = false;
+    }, 2000);
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
     const actions = {

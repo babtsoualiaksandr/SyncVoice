@@ -105,6 +105,9 @@
     <details class="save-menu" id="save-menu" {% if audio.status != 'done' %}hidden{% endif %}>
       <summary class="btn btn-primary">Сохранить субтитры</summary>
       <div class="save-menu-list">
+        <button type="button" id="copy-subtitles" data-url="{% url 'player:download_subtitles' audio.pk 'txt' %}">
+          <strong>В буфер обмена</strong><span>Текст с временем — вставить в письмо, чат, документ</span>
+        </button>
         <a href="{% url 'player:download_subtitles' audio.pk 'txt' %}" download>
           <strong>TXT</strong><span>Текст с временем, для чтения</span>
         </a>

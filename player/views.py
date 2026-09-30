@@ -41,7 +41,7 @@ def _days_summary():
     )
 
 
-def index(request):
+def index(request, upload_form=None):
     days = list(_days_summary())
     day = parse_date(request.GET.get('day') or '') or (days[0]['day'] if days else None)
     calls = calls_for_day(day) if day else AudioFile.objects.none()
@@ -51,7 +51,7 @@ def index(request):
         'day': day,
         'calls': calls,
         'other_audio': AudioFile.objects.filter(call_started_at=None),
-        'upload_form': AudioUploadForm(),
+        'upload_form': upload_form or AudioUploadForm(),
         'sync_day': timezone.localdate() - timedelta(days=1),
         'last_sync': PbxSync.objects.first(),
         'settings': settings,
@@ -62,19 +62,18 @@ def index(request):
 @require_POST
 def upload(request):
     form = AudioUploadForm(request.POST, request.FILES)
-    if form.is_valid():
-        info = parse_call_name(form.cleaned_data['file'].name)
-        existing = info and AudioFile.objects.filter(call_id=info['call_id']).first()
-        if existing:
-            messages.info(request, 'Этот звонок уже загружен.')
-            return redirect(existing)
-        audio = form.save()
-        audio.duration = wav_duration(audio.file.path)
-        audio.save(update_fields=['duration'])  # status is pending: the worker transcribes it
-        return redirect(audio)
-    for error in form.errors.get('file', []):
-        messages.error(request, error)
-    return redirect('player:index')
+    if not form.is_valid():
+        return index(request, upload_form=form)
+    info = parse_call_name(form.cleaned_data['file'].name)
+    existing = info and AudioFile.objects.filter(call_id=info['call_id']).first()
+    if existing:
+        messages.info(request, 'Этот звонок уже загружен.')
+        return redirect(existing)
+    audio = form.save()
+    audio.duration = wav_duration(audio.file.path)
+    audio.save(update_fields=['duration'])  # status is pending: the worker transcribes it
+    messages.success(request, 'Файл загружен и поставлен в очередь на распознавание.')
+    return redirect(audio)
 
 
 @require_POST

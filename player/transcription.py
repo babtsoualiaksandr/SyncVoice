@@ -10,6 +10,7 @@ The model is loaded once per process and reused; recognitions run one at a
 time (the worker processes the queue sequentially, the lock guards against
 accidental concurrent calls).
 """
+import importlib.util
 import logging
 import threading
 
@@ -61,14 +62,9 @@ ENGINES = {
 
 
 def available_engines() -> list[str]:
-    names = []
-    for name, (_, module) in ENGINES.items():
-        try:
-            __import__(module)
-        except ImportError:
-            continue
-        names.append(name)
-    return names
+    # find_spec checks without importing: loading both engines into one
+    # process brings two OpenMP runtimes (torch + CTranslate2) and segfaults.
+    return [name for name, (_, module) in ENGINES.items() if importlib.util.find_spec(module)]
 
 
 def make_engine(name: str | None = None):

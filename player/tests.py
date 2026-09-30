@@ -1,5 +1,6 @@
 import io
 import shutil
+import sys
 import tempfile
 import wave
 from datetime import date, datetime
@@ -159,6 +160,11 @@ class DownloadSubtitlesTests(TestCase):
     def test_unknown_format(self):
         self.assertEqual(self.download('docx').status_code, 404)
 
+    def test_copy_to_clipboard_uses_txt_export(self):
+        r = self.client.get(self.audio.get_absolute_url())
+        txt_url = reverse('player:download_subtitles', args=[self.audio.pk, 'txt'])
+        self.assertContains(r, f'id="copy-subtitles" data-url="{txt_url}"')
+
 
 class UploadTests(TestCase):
     def test_rejects_non_wav(self):
@@ -167,6 +173,37 @@ class UploadTests(TestCase):
         }, follow=True)
         self.assertContains(r, 'Поддерживаются только файлы .wav')
         self.assertFalse(AudioFile.objects.exists())
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_pbx_name_gives_call_details(self):
+        r = self.client.post(reverse('player:upload'), {'file': ContentFile(make_wav(), name=CALL_A)})
+        audio = AudioFile.objects.get()
+        self.assertRedirects(r, audio.get_absolute_url())
+        self.assertEqual((audio.phone, audio.operator), ('375290000103', '308'))
+        self.assertEqual(timezone.localtime(audio.call_started_at).date(), date(2026, 9, 25))
+        self.assertEqual(audio.status, AudioFile.Status.PENDING)  # queued for the worker
+        self.assertAlmostEqual(audio.duration, 1.0)
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_other_name_requires_date(self):
+        r = self.client.post(reverse('player:upload'), {'file': ContentFile(make_wav(), name='Интервью.wav')})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'укажите дату и время звонка')
+        self.assertContains(r, '<details id="upload" open>', html=False)
+        self.assertFalse(AudioFile.objects.exists())
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_other_name_with_entered_details(self):
+        self.client.post(reverse('player:upload'), {
+            'file': ContentFile(make_wav(), name='Интервью.wav'),
+            'call_started_at': '2026-09-27T10:15', 'operator': '308', 'phone': '+375 (29) 000-00-99',
+        })
+        audio = AudioFile.objects.get()
+        self.assertEqual(timezone.localtime(audio.call_started_at).strftime('%Y-%m-%d %H:%M'), '2026-09-27 10:15')
+        self.assertEqual((audio.operator, audio.phone), ('308', '375290000099'))
+        # The call now shows up under its day.
+        r = self.client.get(reverse('player:index') + '?day=2026-09-27')
+        self.assertContains(r, audio.get_absolute_url())
 
     @override_settings(MEDIA_ROOT=MEDIA_ROOT)
     def test_same_call_twice_opens_existing(self):
@@ -417,6 +454,19 @@ class WorkerTests(TestCase):
         worker.recover_interrupted()
         audio.refresh_from_db()
         self.assertEqual(audio.status, AudioFile.Status.PENDING)
+
+
+class EngineTests(TestCase):
+    def test_available_engines_does_not_import(self):
+        # Importing both torch and CTranslate2 in one process segfaults.
+        from .transcription import available_engines
+
+        with mock.patch.dict('sys.modules'):
+            for module in ('whisper', 'faster_whisper'):
+                sys.modules.pop(module, None)
+            available_engines()
+            self.assertNotIn('whisper', sys.modules)
+            self.assertNotIn('faster_whisper', sys.modules)
 
 
 class SettingsFormTests(TestCase):
