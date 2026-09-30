@@ -414,3 +414,17 @@ table.stations .center { text-align: center; vertical-align: middle; }
 table.stations tr.new-row td { background: var(--accent-soft); }
 table.stations tr.has-error td { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); }
 table.stations .errorlist { font-size: 0.8rem; }
+
+/* ---------- multi-file upload ---------- */
+
+.drop-zone {
+  display: grid; gap: 8px; justify-items: start;
+  padding: 16px; border: 2px dashed var(--border); border-radius: 10px;
+  cursor: pointer; color: var(--muted);
+}
+.drop-zone strong { color: var(--text); }
+.drop-zone.dragging { border-color: var(--accent); background: var(--accent-soft); }
+.file-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; font-size: 0.9rem; }
+.file-list li { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.file-list .file-name { word-break: break-all; }
+.warn-text { color: var(--warn); }

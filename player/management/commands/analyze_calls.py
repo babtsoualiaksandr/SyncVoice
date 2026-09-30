@@ -1,9 +1,9 @@
 import time
 
 from django.core.management.base import BaseCommand, CommandError
-from django.utils.dateparse import parse_date
 
 from player import analysis
+from player.views import parse_date
 from player.models import AudioFile, CallAnalysis
 
 RETRY_DELAYS = (5, 15, 30)  # seconds, for rate limits / overloaded model

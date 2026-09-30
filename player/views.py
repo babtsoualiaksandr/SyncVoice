@@ -9,7 +9,7 @@ from django.http import FileResponse, Http404, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date as _parse_date
 from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_GET, require_POST
 
@@ -26,6 +26,14 @@ from .sync import make_client
 
 CITIES = ['Минск', 'Брест', 'Витебск', 'Гомель', 'Гродно', 'Могилев']
 STATIONS = ['Не слушает', 'Не слушал вчера', 'Не слушала вчера', 'за 30 дней слушал', 'за 30 дней слушала']
+
+
+def parse_date(value):
+    """ISO date or None — also for well-formed but impossible dates like 2026-13-45."""
+    try:
+        return _parse_date(value or '')
+    except ValueError:
+        return None
 
 
 def _days_summary():
@@ -66,16 +74,45 @@ def upload(request):
     form = AudioUploadForm(request.POST, request.FILES)
     if not form.is_valid():
         return index(request, upload_form=form)
-    info = parse_call_name(form.cleaned_data['file'].name)
-    existing = info and AudioFile.objects.filter(call_id=info['call_id']).first()
-    if existing:
-        messages.info(request, 'Этот звонок уже загружен.')
-        return redirect(existing)
-    audio = form.save()
-    audio.duration = wav_duration(audio.file.path)
-    audio.save(update_fields=['duration'])  # status is pending: the worker transcribes it
-    messages.success(request, 'Файл загружен и поставлен в очередь на распознавание.')
-    return redirect(audio)
+    others = form.other_files()
+    created, duplicates = [], []
+    seen_call_ids = set()
+    for f in form.cleaned_data['files']:
+        info = parse_call_name(f.name)
+        if info:
+            if info['call_id'] in seen_call_ids or AudioFile.objects.filter(call_id=info['call_id']).exists():
+                duplicates.append(f.name)
+                continue
+            seen_call_ids.add(info['call_id'])
+            audio = AudioFile(file=f)
+        else:
+            audio = AudioFile(
+                file=f,
+                call_started_at=form.cleaned_data['call_started_at'],
+                operator=form.cleaned_data['operator'],
+                phone=form.cleaned_data['phone'] if len(others) == 1 else '',
+            )
+        audio.save()  # status is pending: the worker transcribes it
+        audio.duration = wav_duration(audio.file.path)
+        audio.save(update_fields=['duration'])
+        created.append(audio)
+
+    if len(created) == 1 and not duplicates:
+        messages.success(request, 'Файл загружен и поставлен в очередь на распознавание.')
+        return redirect(created[0])
+    if created:
+        messages.success(request, f'Загружено файлов: {len(created)}. Они поставлены в очередь на распознавание.')
+    if duplicates:
+        messages.info(request, f'Уже были загружены, пропущено {len(duplicates)}: {", ".join(duplicates)}')
+    if len(duplicates) == 1 and not created:
+        info = parse_call_name(duplicates[0])
+        return redirect(AudioFile.objects.get(call_id=info['call_id']))
+    url = reverse('player:index')
+    days = [timezone.localtime(a.call_started_at).date() for a in created if a.call_started_at]
+    days += [parse_call_name(name)['call_started_at'].date() for name in duplicates]
+    if days:
+        url += f'?day={days[0]:%Y-%m-%d}'
+    return redirect(url)
 
 
 @require_POST

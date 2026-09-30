@@ -139,6 +139,8 @@ WHITENOISE_AUTOREFRESH = DEBUG
 # Uploaded audio files
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+# A day of calls (~130 WAV files) can be uploaded at once; Django's default is 100.
+DATA_UPLOAD_MAX_NUMBER_FILES = 1000
 
 
 # Whisper

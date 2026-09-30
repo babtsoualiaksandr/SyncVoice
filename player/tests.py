@@ -176,14 +176,14 @@ class DownloadSubtitlesTests(TestCase):
 class UploadTests(TestCase):
     def test_rejects_non_wav(self):
         r = self.client.post(reverse('player:upload'), {
-            'file': ContentFile(b'x', name='song.mp3'),
+            'files': ContentFile(b'x', name='song.mp3'),
         }, follow=True)
         self.assertContains(r, 'Поддерживаются только файлы .wav')
         self.assertFalse(AudioFile.objects.exists())
 
     @override_settings(MEDIA_ROOT=MEDIA_ROOT)
     def test_pbx_name_gives_call_details(self):
-        r = self.client.post(reverse('player:upload'), {'file': ContentFile(make_wav(), name=CALL_A)})
+        r = self.client.post(reverse('player:upload'), {'files': ContentFile(make_wav(), name=CALL_A)})
         audio = AudioFile.objects.get()
         self.assertRedirects(r, audio.get_absolute_url())
         self.assertEqual((audio.phone, audio.operator), ('375290000103', '308'))
@@ -193,7 +193,7 @@ class UploadTests(TestCase):
 
     @override_settings(MEDIA_ROOT=MEDIA_ROOT)
     def test_other_name_requires_date(self):
-        r = self.client.post(reverse('player:upload'), {'file': ContentFile(make_wav(), name='Интервью.wav')})
+        r = self.client.post(reverse('player:upload'), {'files': ContentFile(make_wav(), name='Интервью.wav')})
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, 'укажите дату и время звонка')
         self.assertContains(r, '<details id="upload" open>', html=False)
@@ -202,7 +202,7 @@ class UploadTests(TestCase):
     @override_settings(MEDIA_ROOT=MEDIA_ROOT)
     def test_other_name_with_entered_details(self):
         self.client.post(reverse('player:upload'), {
-            'file': ContentFile(make_wav(), name='Интервью.wav'),
+            'files': ContentFile(make_wav(), name='Интервью.wav'),
             'call_started_at': '2026-09-27T10:15', 'operator': '308', 'phone': '+375 (29) 000-00-99',
         })
         audio = AudioFile.objects.get()
@@ -213,9 +213,58 @@ class UploadTests(TestCase):
         self.assertContains(r, audio.get_absolute_url())
 
     @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_many_files_at_once(self):
+        make_call(CALL_C)  # already uploaded earlier
+        files = [
+            ContentFile(make_wav(), name=CALL_A),
+            ContentFile(make_wav(), name=CALL_B),
+            ContentFile(make_wav(), name=CALL_C),
+            ContentFile(make_wav(), name=CALL_A),  # twice in the same batch
+            ContentFile(make_wav(), name='Интервью 1.wav'),
+            ContentFile(make_wav(), name='Интервью 2.wav'),
+        ]
+        r = self.client.post(reverse('player:upload'), {
+            'files': files, 'call_started_at': '2026-09-27T10:15', 'operator': '308',
+        }, follow=True)
+        self.assertEqual(AudioFile.objects.count(), 5)  # 1 old + A, B + two interviews
+        self.assertContains(r, 'Загружено файлов: 4')
+        self.assertContains(r, f'пропущено 2: {CALL_C}, {CALL_A}')
+        self.assertEqual(r.redirect_chain[-1][0], reverse('player:index') + '?day=2026-09-25')
+        interview = AudioFile.objects.get(title='Интервью 1')
+        self.assertEqual(interview.operator, '308')
+        self.assertEqual(timezone.localtime(interview.call_started_at).strftime('%d.%m %H:%M'), '27.09 10:15')
+        self.assertEqual(interview.status, AudioFile.Status.PENDING)
+        self.assertAlmostEqual(interview.duration, 1.0)
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_batch_of_duplicates_opens_their_day(self):
+        make_call(CALL_A)
+        make_call(CALL_B)
+        files = [ContentFile(make_wav(), name=CALL_A), ContentFile(make_wav(), name=CALL_B)]
+        r = self.client.post(reverse('player:upload'), {'files': files})
+        self.assertRedirects(r, reverse('player:index') + '?day=2026-09-25')
+        self.assertEqual(AudioFile.objects.count(), 2)
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_batch_other_names_need_date_and_single_phone(self):
+        files = [ContentFile(make_wav(), name='a.wav'), ContentFile(make_wav(), name='b.wav')]
+        r = self.client.post(reverse('player:upload'), {'files': files, 'phone': '375290000001'})
+        self.assertContains(r, 'укажите дату и время звонка')
+        self.assertContains(r, 'a.wav, b.wav')
+        self.assertContains(r, 'Телефон можно указать, только когда файл не из АТС один.')
+        self.assertFalse(AudioFile.objects.exists())
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_batch_rejects_non_wav(self):
+        files = [ContentFile(make_wav(), name=CALL_A), ContentFile(b'x', name='song.mp3')]
+        r = self.client.post(reverse('player:upload'), {'files': files})
+        self.assertContains(r, 'Поддерживаются только файлы .wav: song.mp3')
+        self.assertFalse(AudioFile.objects.exists())
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
     def test_same_call_twice_opens_existing(self):
         existing = make_call(CALL_A)
-        r = self.client.post(reverse('player:upload'), {'file': ContentFile(make_wav(), name=CALL_A)})
+        r = self.client.post(reverse('player:upload'), {'files': ContentFile(make_wav(), name=CALL_A)})
         self.assertRedirects(r, existing.get_absolute_url())
         self.assertEqual(AudioFile.objects.count(), 1)
 
@@ -277,8 +326,59 @@ class ReportTests(TestCase):
         self.assertEqual(ws.auto_filter.ref, 'A1:O4')
         self.assertAlmostEqual(ws.column_dimensions['K'].width, 29.3)
         self.assertEqual(ws['B2'].number_format, 'dd.mm.yyyy')
-        self.assertEqual(ws['C2'].number_format, '@')
+        self.assertEqual(ws['C2'].number_format, '0')  # number, shown in full
         self.assertEqual(ws['D2'].number_format, 'yyyy-mm-dd h:mm:ss')
+
+    def test_invalid_dates(self):
+        self.assertEqual(self.client.get('/report/2026-13-45.xlsx').status_code, 404)
+        self.assertEqual(self.client.get(reverse('player:index') + '?day=2026-02-30').status_code, 200)
+        r = self.client.post(reverse('player:sync_start'), {'day': '2026-02-30'}, follow=True)
+        self.assertContains(r, 'Укажите день.')
+
+    def test_styles_match_template(self):
+        ws = self.load()
+        self.assertEqual(ws.row_dimensions[1].height, 68)
+        for col in 'BCDEN':
+            header = ws[f'{col}1']
+            self.assertEqual((header.alignment.horizontal, header.alignment.vertical), ('center', 'center'))
+            self.assertEqual(header.border.bottom.style, 'thin')
+        self.assertIsNone(ws['O1'].border.bottom.style)  # «Контроль» has no frame in the template
+        self.assertEqual((ws['C1'].font.sz, ws['G1'].font.sz), (12, 11))
+        self.assertEqual((ws['C2'].font.name, ws['C2'].alignment.horizontal), ('Arial', 'right'))
+        self.assertEqual((ws['K2'].font.name, ws['K2'].alignment.wrap_text), ('Calibri', True))
+
+    def test_empty_fields_filled_from_ai_suggestion(self):
+        for audio, city, stations in [(self.a, 'Минск', 'Русское'), (self.b, 'Гродно', 'Супер FM')]:
+            CallAnalysis.objects.create(audio=audio, status=CallAnalysis.Status.DONE, city=city, stations=stations)
+        ws = self.load()
+        rows = {ws[f'C{r}'].value: r for r in (2, 3, 4)}
+        reviewed, unreviewed = rows[375290000103], rows[375290000104]
+        # The controller's own value wins; only the empty field takes the suggestion.
+        self.assertEqual(ws[f'G{reviewed}'].value, 'Брест')
+        self.assertFalse(ws[f'G{reviewed}'].font.i)
+        self.assertEqual(ws[f'I{reviewed}'].value, 'Не слушает')
+        # Not reviewed: suggestions in grey italic with a note.
+        self.assertEqual((ws[f'G{unreviewed}'].value, ws[f'I{unreviewed}'].value), ('Гродно', 'Супер FM'))
+        self.assertTrue(ws[f'G{unreviewed}'].font.i)
+        self.assertIn('Подсказка ИИ', ws[f'I{unreviewed}'].comment.text)
+        self.assertIsNone(ws[f'H{unreviewed}'].value)  # empty suggestion stays empty
+
+    def test_highlighting_like_controllers(self):
+        CallReview.objects.create(audio=self.b, interviewer='Марина 308', result='ок',
+                                  error_comment='Рекомендация: не подсказывать станцию')
+        ws = self.load()
+        # Row 2: Елена, «ошибка» -> whole row orange; row 4: «ок» with a comment -> green comment.
+        self.assertEqual({ws[f'{c}2'].fill.fgColor.rgb for c in 'ABCDEFGHIJKLMNOP'}, {'FFFFC000'})
+        self.assertEqual(ws['K4'].fill.fgColor.rgb, 'FF00FF00')
+        self.assertEqual(ws['G4'].fill.fgColor.rgb, 'FFFFFFFF')
+        self.assertEqual(ws['K3'].fill.fgColor.rgb, 'FFFFFFFF')  # «ок» without a comment
+
+    def test_long_comment_makes_row_taller(self):
+        CallReview.objects.filter(audio=self.c).update(error_comment='очень длинный комментарий контролёра ' * 4)
+        ws = self.load()
+        heights = [ws.row_dimensions[i].height for i in (2, 3, 4)]
+        self.assertEqual(heights[1:], [16, 16])
+        self.assertGreater(heights[0], 16)  # Елена's row with the long comment
 
     def test_rows(self):
         ws = self.load()
@@ -287,7 +387,7 @@ class ReportTests(TestCase):
         # Sorted by interviewer, then time: Елена first, then Марина's two calls.
         self.assertEqual([r[4] for r in rows], ['Елена 306', 'Марина 308', 'Марина 308'])
         elena, marina_reviewed, marina_open = rows
-        self.assertEqual(elena[2], '375290000105')
+        self.assertEqual(elena[2], 375290000105)
         self.assertEqual(elena[3], datetime(2026, 9, 25, 9, 18, 17))
         self.assertEqual(elena[9], 'есть')
         self.assertEqual(elena[10], 'неверно указан возраст')

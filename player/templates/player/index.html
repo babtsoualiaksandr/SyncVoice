@@ -74,19 +74,24 @@
 
 <section class="card">
   <details id="upload" {% if upload_form.errors %}open{% endif %}>
-    <summary><strong>Добавить WAV-файл вручную</strong></summary>
-    <form class="upload" method="post" action="{% url 'player:upload' %}" enctype="multipart/form-data">
+    <summary><strong>Добавить WAV-файлы вручную</strong></summary>
+    <form class="upload" id="upload-form" method="post" action="{% url 'player:upload' %}" enctype="multipart/form-data">
       {% csrf_token %}
-      {% with field=upload_form.file %}{% include 'player/_field.html' %}{% endwith %}
+      <label class="drop-zone" id="drop-zone" for="{{ upload_form.files.id_for_label }}">
+        <strong>Выберите WAV-файлы</strong> или перетащите их сюда — можно сразу много
+        {{ upload_form.files }}
+      </label>
+      {{ upload_form.files.errors }}
+      <ul class="file-list" id="file-list" hidden></ul>
       <p class="hint">Если имя файла из АТС (<code>out-номер-внутр-ГГГГММДД-ЧЧММСС-….wav</code>),
-        дата, телефон и внутр. номер возьмутся из него. Для других файлов укажите их ниже.</p>
-      <div class="field-row">
+        дата, телефон и внутр. номер возьмутся из него. Для файлов с другими именами укажите дату ниже —
+        она применится ко всем таким файлам. Уже загруженные звонки пропускаются.</p>
+      <div class="field-row" id="other-fields">
         {% with field=upload_form.call_started_at %}{% include 'player/_field.html' %}{% endwith %}
         {% with field=upload_form.operator %}{% include 'player/_field.html' %}{% endwith %}
         {% with field=upload_form.phone %}{% include 'player/_field.html' %}{% endwith %}
       </div>
-      {% with field=upload_form.title %}{% include 'player/_field.html' %}{% endwith %}
-      <button class="btn btn-primary" type="submit">Загрузить и распознать</button>
+      <button class="btn btn-primary" type="submit" id="upload-submit">Загрузить и распознать</button>
     </form>
   </details>
   {% if other_audio %}
@@ -103,4 +108,5 @@
 
 {% block scripts %}
 <script src="{% static 'player/index.js' %}"></script>
+<script src="{% static 'player/upload.js' %}"></script>
 {% endblock %}

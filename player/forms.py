@@ -6,41 +6,77 @@ from django import forms
 from .models import CITIES, AppSettings, AudioFile, CallReview, Interviewer, RadioStation, parse_call_name
 
 
-class AudioUploadForm(forms.ModelForm):
-    """Manual upload. Call details come from a PBX-style file name; for other
-    names the call date must be entered, or the call would appear in no day
-    and no report."""
+class MultipleFileInput(forms.ClearableFileInput):
+    allow_multiple_selected = True
 
-    class Meta:
-        model = AudioFile
-        fields = ['file', 'call_started_at', 'operator', 'phone', 'title']
-        widgets = {
-            'file': forms.ClearableFileInput(attrs={'accept': '.wav,audio/wav,audio/x-wav'}),
-            'call_started_at': forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
-            'operator': forms.TextInput(attrs={'placeholder': 'например, 308', 'inputmode': 'numeric'}),
-            'phone': forms.TextInput(attrs={'placeholder': '375291234567', 'inputmode': 'numeric'}),
-            'title': forms.TextInput(attrs={'placeholder': 'Необязательно — возьмём из имени файла'}),
-        }
-        labels = {'operator': 'внутр. номер интервьюера'}
 
-    def clean_file(self):
-        f = self.cleaned_data['file']
-        if Path(f.name).suffix.lower() != '.wav':
-            raise forms.ValidationError('Поддерживаются только файлы .wav')
-        return f
+class MultipleFileField(forms.FileField):
+    """File field that accepts several files and returns a list."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('widget', MultipleFileInput())
+        super().__init__(*args, **kwargs)
+
+    def clean(self, data, initial=None):
+        single = super().clean
+        if isinstance(data, (list, tuple)):
+            return [single(d, initial) for d in data]
+        return [single(data, initial)]
+
+
+class AudioUploadForm(forms.Form):
+    """Manual upload of one or many WAV files.
+
+    Call details come from PBX-style file names. Files with other names need
+    the call date (one for the whole batch), otherwise they would appear in
+    no day and no report.
+    """
+
+    files = MultipleFileField(
+        label='WAV-файлы',
+        widget=MultipleFileInput(attrs={'accept': '.wav,audio/wav,audio/x-wav'}),
+    )
+    call_started_at = forms.DateTimeField(
+        label='дата и время звонка', required=False,
+        widget=forms.DateTimeInput(attrs={'type': 'datetime-local'}, format='%Y-%m-%dT%H:%M'),
+        help_text='Для файлов, чьё имя не в формате АТС.',
+    )
+    operator = forms.CharField(
+        label='внутр. номер интервьюера', required=False, max_length=16,
+        widget=forms.TextInput(attrs={'placeholder': 'например, 308', 'inputmode': 'numeric'}),
+        help_text='Для файлов, чьё имя не в формате АТС.',
+    )
+    phone = forms.CharField(
+        label='телефон', required=False, max_length=32,
+        widget=forms.TextInput(attrs={'placeholder': '375291234567', 'inputmode': 'numeric'}),
+        help_text='Только если такой файл один.',
+    )
+
+    def clean_files(self):
+        files = self.cleaned_data['files']
+        bad = [f.name for f in files if Path(f.name).suffix.lower() != '.wav']
+        if bad:
+            raise forms.ValidationError(f'Поддерживаются только файлы .wav: {", ".join(bad)}')
+        return files
 
     def clean_phone(self):
         return re.sub(r'\D', '', self.cleaned_data['phone'])
 
+    def other_files(self):
+        """Files whose names are not in PBX format."""
+        return [f for f in self.cleaned_data.get('files', []) if not parse_call_name(f.name)]
+
     def clean(self):
         cleaned = super().clean()
-        f = cleaned.get('file')
-        if f and not parse_call_name(f.name) and not cleaned.get('call_started_at'):
+        others = self.other_files()
+        if others and not cleaned.get('call_started_at'):
             self.add_error(
                 'call_started_at',
-                'Имя файла не в формате АТС — укажите дату и время звонка, '
-                'иначе запись не попадёт ни в один день и отчёт.',
+                'Имя не в формате АТС — укажите дату и время звонка, иначе запись не попадёт '
+                f'ни в один день и отчёт: {", ".join(f.name for f in others)}',
             )
+        if cleaned.get('phone') and len(others) > 1:
+            self.add_error('phone', 'Телефон можно указать, только когда файл не из АТС один.')
         return cleaned
 
 
