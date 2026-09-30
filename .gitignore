@@ -7,6 +7,12 @@ ENV/
 # FFmpeg symlink created by settings.py
 .bin/
 
+# Call recordings (personal data)
+*.wav
+
+# Local script with proxy credentials
+run_cloude_here.sh
+
 # Python
 __pycache__/
 *.py[cod]
