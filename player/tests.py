@@ -23,7 +23,7 @@ from django.utils import timezone
 
 from google.genai import errors as genai_errors
 
-from . import analysis, crm, crm_proxy, report, stations, worker
+from . import analysis, audio_paths, crm, crm_proxy, report, stations, worker
 from .analysis import SuggestedFields
 from . import forms as forms_module
 from .forms import SettingsForm
@@ -1346,3 +1346,51 @@ class CrmCallPageTests(TestCase):
         r = self.client.get(self.audio.get_absolute_url())
         self.assertContains(r, f'data-lookup-url="{reverse("player:crm_lookup", args=[self.audio.pk])}"')
         self.assertContains(r, f'data-url="{reverse("player:crm_open", args=[self.audio.pk])}"')
+
+
+class AudioDayFolderTests(TestCase):
+    def test_folder_from_pbx_name_entered_date_or_today(self):
+        self.assertEqual(audio_paths.audio_upload_to(AudioFile(), CALL_A), f'audio/2026/09/25/{CALL_A}')
+        entered = AudioFile(call_started_at=timezone.make_aware(datetime(2026, 9, 27, 10, 15)))
+        self.assertEqual(audio_paths.audio_upload_to(entered, 'Интервью.wav'), 'audio/2026/09/27/Интервью.wav')
+        today = timezone.localdate()
+        self.assertEqual(audio_paths.audio_upload_to(AudioFile(), 'x.wav'), f'audio/{today:%Y/%m/%d}/x.wav')
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_new_uploads_go_to_day_folder(self):
+        audio = make_call(CALL_A)
+        # The shared test media folder may already hold this name: Django adds a suffix then.
+        self.assertRegex(audio.file.name, r'^audio/2026/09/25/out-375290000103-308-20260925-093215-1790000001(_\w+)?\.100\.wav$')
+        self.assertTrue(Path(audio.file.path).exists())
+
+    def test_relocate_old_flat_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / 'audio').mkdir()
+            (Path(root) / 'audio' / CALL_A).write_bytes(b'A')
+            (Path(root) / 'audio' / 'manual.wav').write_bytes(b'M')
+            # a file of the same name already in the day folder
+            (Path(root) / 'audio/2026/09/25').mkdir(parents=True)
+            (Path(root) / 'audio/2026/09/25' / CALL_B).write_bytes(b'old')
+            (Path(root) / 'audio' / CALL_B).write_bytes(b'B')
+            a = AudioFile.objects.create(file=f'audio/{CALL_A}')
+            b = AudioFile.objects.create(file=f'audio/{CALL_B}')
+            manual = AudioFile.objects.create(file='audio/manual.wav',
+                                              call_started_at=timezone.make_aware(datetime(2026, 9, 27, 10, 0)))
+            missing = AudioFile.objects.create(file='audio/out-375290000999-301-20260925-100000-1790000099.199.wav')
+
+            self.assertEqual(audio_paths.relocate(AudioFile, root), 3)
+            a.refresh_from_db(); b.refresh_from_db(); manual.refresh_from_db(); missing.refresh_from_db()
+            self.assertEqual(a.file.name, f'audio/2026/09/25/{CALL_A}')
+            self.assertEqual((Path(root) / a.file.name).read_bytes(), b'A')
+            self.assertEqual(b.file.name, f'audio/2026/09/25/{Path(CALL_B).stem}_1.wav')  # name was taken
+            self.assertEqual(manual.file.name, 'audio/2026/09/27/manual.wav')
+            self.assertEqual(missing.file.name, 'audio/out-375290000999-301-20260925-100000-1790000099.199.wav')
+            self.assertFalse((Path(root) / 'audio' / CALL_A).exists())
+            self.assertEqual(audio_paths.relocate(AudioFile, root), 0)  # running again changes nothing
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_pbx_download_goes_to_day_folder(self):
+        AppSettings.objects.create(pk=1, min_duration=30)
+        run_sync(PbxSync.objects.create(day=date(2026, 9, 25)), client=FakePbx([rec(CALL_B)]))
+        self.assertRegex(AudioFile.objects.get().file.name,
+                         r'^audio/2026/09/25/out-375290000104-308-20260925-095111-1790000002(_\w+)?\.101\.wav$')

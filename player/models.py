@@ -7,6 +7,8 @@ from django.db import models
 from django.urls import reverse
 from django.utils import timezone
 
+from .audio_paths import audio_upload_to
+
 # Call recording names from the PBX:
 # out-<phone>-<operator>-<YYYYMMDD>-<HHMMSS>-<call id>.wav
 # When the name is taken, Django storage inserts "_<random>" before the first
@@ -143,7 +145,7 @@ class AudioFile(models.Model):
         ERROR = 'error', 'Ошибка'
 
     title = models.CharField('название', max_length=255, blank=True)
-    file = models.FileField('файл', upload_to='audio/')
+    file = models.FileField('файл', upload_to=audio_upload_to, max_length=255)
     duration = models.FloatField('длительность, с', null=True, blank=True)
     phone = models.CharField('номер телефона', max_length=32, blank=True, db_index=True)
     operator = models.CharField('номер оператора', max_length=16, blank=True, db_index=True)
