@@ -23,7 +23,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .audio_utils import wav_duration
 from .credentials import CRM_SERVICE, SERVICE as PBX_SERVICE, get_password, set_password, store_name
 from .forms import AudioUploadForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
-from . import analysis, crm
+from . import analysis, crm, stats
 from . import stations as station_directory
 from .models import CITIES as STATION_CITIES, AppSettings, AudioFile, CallAnalysis, CallReview, Interviewer, PbxSync, RadioStation, parse_call_name
 from .pbx import PbxError
@@ -58,15 +58,40 @@ def _days_summary():
     )
 
 
+def _sort_columns(day, sort):
+    """Header cells of the day's call table: label, link that sorts by it, arrow of the current sort."""
+    base = f"{reverse('player:index')}?day={day:%Y-%m-%d}&sort=" if day else '?sort='
+    columns = []
+    for key, label in [('time', 'Время'), (None, 'Телефон'), ('interviewer', 'Интервьюер'),
+                       ('duration', 'Длит.'), ('status', 'Субтитры'), ('result', 'Контроль')]:
+        if key is None:
+            columns.append({'label': label})
+            continue
+        current = sort.lstrip('-') == key
+        descending = sort.startswith('-')
+        columns.append({
+            'label': label,
+            'url': base + (key if current and descending else f'-{key}' if current else key),
+            'arrow': ('↓' if descending else '↑') if current else '',
+        })
+    return columns
+
+
 def index(request, upload_form=None):
     days = list(_days_summary())
     day = parse_date(request.GET.get('day') or '') or (days[0]['day'] if days else None)
-    calls = calls_for_day(day) if day else AudioFile.objects.none()
+    calls = stats.label_calls(calls_for_day(day)) if day else []
+    calls, sort = stats.sort_calls(calls, request.GET.get('sort', 'time'))
+    day_stats, day_total = stats.interviewer_stats(calls)
     settings = AppSettings.load()
     return render(request, 'player/index.html', {
         'days': days,
         'day': day,
         'calls': calls,
+        'sort': sort,
+        'columns': _sort_columns(day, sort),
+        'day_stats': day_stats,
+        'day_total': day_total,
         'other_audio': AudioFile.objects.filter(call_started_at=None),
         'upload_form': upload_form or AudioUploadForm(),
         'sync_day': timezone.localdate() - timedelta(days=1),
@@ -564,3 +589,17 @@ def crm_open(request, pk):
     call_time = timezone.localtime(audio.call_started_at).replace(tzinfo=None) if audio.call_started_at else None
     chosen = crm.pick_survey(surveys, call_time)
     return redirect(client.url(chosen.path if chosen else 'admin/Reports'))
+
+
+def stats_view(request):
+    """Per-interviewer statistics for a period (default: this month up to today)."""
+    today = timezone.localdate()
+    start = parse_date(request.GET.get('from') or '') or today.replace(day=1)
+    end = parse_date(request.GET.get('to') or '') or today
+    if start > end:
+        start, end = end, start
+    calls = stats.label_calls(
+        AudioFile.objects.filter(call_started_at__date__range=(start, end)).select_related('review')
+    )
+    rows, total = stats.interviewer_stats(calls)
+    return render(request, 'player/stats.html', {'start': start, 'end': end, 'rows': rows, 'total': total})

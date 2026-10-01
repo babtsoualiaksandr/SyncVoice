@@ -1394,3 +1394,68 @@ class AudioDayFolderTests(TestCase):
         run_sync(PbxSync.objects.create(day=date(2026, 9, 25)), client=FakePbx([rec(CALL_B)]))
         self.assertRegex(AudioFile.objects.get().file.name,
                          r'^audio/2026/09/25/out-375290000104-308-20260925-095111-1790000002(_\w+)?\.101\.wav$')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class SortAndStatsTests(TestCase):
+    def setUp(self):
+        Interviewer.objects.create(extension='308', name='Марина')
+        Interviewer.objects.create(extension='306', name='Елена')
+        self.a = make_call(CALL_A, duration=120)   # 308, 09:32:15
+        self.b = make_call(CALL_B, duration=60)    # 308, 09:51:11
+        self.c = make_call(CALL_C, duration=300)   # 306, 09:18:17
+        CallReview.objects.create(audio=self.a, interviewer='Марина 308', result='ок', completed=True)
+        CallReview.objects.create(audio=self.c, interviewer='Елена 306', result='ошибка', completed=True)
+        CallReview.objects.create(audio=self.b, result='брак', completed=False)  # draft, no interviewer
+
+    def phones(self, sort):
+        r = self.client.get(reverse('player:index'), {'day': '2026-09-25', 'sort': sort})
+        return [a.phone for a in r.context['calls']], r
+
+    def test_sort_by_time_and_interviewer(self):
+        self.assertEqual(self.phones('time')[0], ['375290000105', '375290000103', '375290000104'])
+        self.assertEqual(self.phones('-time')[0], ['375290000104', '375290000103', '375290000105'])
+        self.assertEqual(self.phones('interviewer')[0], ['375290000105', '375290000103', '375290000104'])
+        self.assertEqual(self.phones('-duration')[0], ['375290000105', '375290000103', '375290000104'])
+        self.assertEqual(self.phones('nonsense')[0], self.phones('time')[0])
+
+    def test_interviewer_column_uses_names(self):
+        _, r = self.phones('time')
+        self.assertEqual([a.interviewer_label for a in r.context['calls']], ['Елена 306', 'Марина 308', 'Марина 308'])
+
+    def test_header_links_toggle_direction(self):
+        _, r = self.phones('interviewer')
+        cols = {c['label']: c for c in r.context['columns']}
+        self.assertEqual(cols['Интервьюер']['arrow'], '↑')
+        self.assertTrue(cols['Интервьюер']['url'].endswith('day=2026-09-25&sort=-interviewer'))
+        self.assertTrue(cols['Время']['url'].endswith('sort=time'))
+        self.assertNotIn('url', cols['Телефон'])
+
+    def test_day_stats(self):
+        _, r = self.phones('time')
+        rows = {row.interviewer: row for row in r.context['day_stats']}
+        marina, elena = rows['Марина 308'], rows['Елена 306']
+        self.assertEqual((marina.calls, marina.reviewed, marina.ok, marina.rejects), (2, 1, 1, 0))  # draft not counted
+        self.assertEqual(marina.seconds, 180)
+        self.assertEqual((elena.errors, elena.error_share), (1, 100))
+        total = r.context['day_total']
+        self.assertEqual((total.calls, total.reviewed, round(total.error_share)), (3, 2, 50))
+        self.assertContains(r, 'Интервьюеры за 25.09.2026')
+
+    def test_stats_page_period(self):
+        make_call('out-375290000301-306-20260801-100000-1780000001.300.wav', duration=90)  # outside
+        r = self.client.get(reverse('player:stats'), {'from': '2026-09-01', 'to': '2026-09-30'})
+        self.assertEqual(r.context['total'].calls, 3)
+        self.assertContains(r, 'Марина 308')
+        r = self.client.get(reverse('player:stats'), {'from': '2026-09-30', 'to': '2026-08-01'})  # swapped
+        self.assertEqual(r.context['total'].calls, 4)
+
+    def test_error_share_ignores_reviews_without_result(self):
+        CallReview.objects.filter(audio=self.c).update(result='')  # reviewed, no result chosen
+        _, r = self.phones('time')
+        elena = next(row for row in r.context['day_stats'] if row.interviewer == 'Елена 306')
+        self.assertEqual((elena.reviewed, elena.error_share), (1, None))
+
+    def test_hms_filter(self):
+        from player.templatetags.player_extras import hms
+        self.assertEqual([hms(5), hms(312), hms(3723.4), hms(None)], ['0:05', '5:12', '1:02:03', ''])

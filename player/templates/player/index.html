@@ -45,14 +45,19 @@
   <div class="table-wrap">
     <table class="calls">
       <thead>
-        <tr><th>Время</th><th>Телефон</th><th>Интервьюер</th><th>Длит.</th><th>Субтитры</th><th>Контроль</th></tr>
+        <tr>
+          {% for col in columns %}
+            <th>{% if col.url %}<a class="sort-link{% if col.arrow %} active{% endif %}" href="{{ col.url }}"
+                 title="Сортировать">{{ col.label }}{% if col.arrow %} {{ col.arrow }}{% endif %}</a>{% else %}{{ col.label }}{% endif %}</th>
+          {% endfor %}
+        </tr>
       </thead>
       <tbody>
         {% for audio in calls %}
           <tr class="{% if audio.review.completed %}is-reviewed{% endif %}">
             <td class="num">{{ audio.call_started_at|time:"H:i:s" }}</td>
             <td><a href="{{ audio.get_absolute_url }}">{{ audio.phone_display }}</a></td>
-            <td>{% if audio.review.interviewer %}{{ audio.review.interviewer }}{% else %}{{ audio.operator }}{% endif %}</td>
+            <td>{{ audio.interviewer_label }}</td>
             <td class="num">{% if audio.duration %}{{ audio.duration|floatformat:0 }} с{% endif %}</td>
             <td><span class="status status-{{ audio.status }}">{{ audio.get_status_display }}</span></td>
             <td>
@@ -69,6 +74,11 @@
       </tbody>
     </table>
   </div>
+
+  {% if day_stats %}
+    <h2 class="mt">Интервьюеры за {{ day|date:"d.m.Y" }}</h2>
+    {% include 'player/_stats_table.html' with rows=day_stats total=day_total %}
+  {% endif %}
 </section>
 {% endif %}
 

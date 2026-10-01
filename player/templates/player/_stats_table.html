@@ -1,0 +1,41 @@
+{% load player_extras %}
+<div class="table-wrap">
+  <table class="calls stats-table">
+    <thead>
+      <tr>
+        <th>Интервьюер</th><th class="num">Звонков</th><th class="num">Проверено</th>
+        <th class="num">ок</th><th class="num">ошибка</th><th class="num">брак</th>
+        <th class="num" title="ошибка + брак среди проверенных звонков с выбранным результатом">Доля ошибок</th>
+        <th class="num">Длительность</th><th class="num">Средняя</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.interviewer }}</td>
+          <td class="num">{{ row.calls }}</td>
+          <td class="num">{{ row.reviewed }}{% if row.not_reviewed %} <span class="hint">/ {{ row.calls }}</span>{% endif %}</td>
+          <td class="num">{{ row.ok|default:"" }}</td>
+          <td class="num">{% if row.errors %}<span class="result result-ошибка">{{ row.errors }}</span>{% endif %}</td>
+          <td class="num">{% if row.rejects %}<span class="result result-брак">{{ row.rejects }}</span>{% endif %}</td>
+          <td class="num">{% if row.error_share is not None %}{{ row.error_share|floatformat:0 }} %{% endif %}</td>
+          <td class="num">{{ row.seconds|hms }}</td>
+          <td class="num">{{ row.avg_seconds|hms }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <th>{{ total.interviewer }}</th>
+        <th class="num">{{ total.calls }}</th>
+        <th class="num">{{ total.reviewed }}</th>
+        <th class="num">{{ total.ok }}</th>
+        <th class="num">{{ total.errors }}</th>
+        <th class="num">{{ total.rejects }}</th>
+        <th class="num">{% if total.error_share is not None %}{{ total.error_share|floatformat:0 }} %{% endif %}</th>
+        <th class="num">{{ total.seconds|hms }}</th>
+        <th class="num">{{ total.avg_seconds|hms }}</th>
+      </tr>
+    </tfoot>
+  </table>
+</div>

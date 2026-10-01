@@ -1,0 +1,25 @@
+{% extends 'player/base.html' %}
+
+{% block title %}Статистика — SyncVoice{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h1>Статистика по интервьюерам</h1>
+  </div>
+  <form class="inline-form" method="get">
+    <label>С <input type="date" name="from" value="{{ start|date:'Y-m-d' }}"></label>
+    <label>по <input type="date" name="to" value="{{ end|date:'Y-m-d' }}"></label>
+    <button class="btn btn-primary" type="submit">Показать</button>
+  </form>
+  <p class="hint">{{ start|date:"d.m.Y" }} — {{ end|date:"d.m.Y" }}: звонков {{ total.calls }},
+    дней со звонками {{ total.days|length }}. «Проверено» — звонки, отмеченные «Готово» в форме контроля;
+    доля ошибок считается среди проверенных звонков, у которых выбран результат. Интервьюер — как в отчёте: выбранный при проверке,
+    иначе по внутреннему номеру из «Настроек».</p>
+  {% if rows %}
+    {% include 'player/_stats_table.html' %}
+  {% else %}
+    <p class="hint">За этот период звонков нет.</p>
+  {% endif %}
+</section>
+{% endblock %}
