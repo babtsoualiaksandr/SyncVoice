@@ -568,3 +568,23 @@ table.stations .errorlist { font-size: 0.8rem; }
 .sort-link:hover, .sort-link.active { color: var(--accent); }
 .stats-table td.num, .stats-table th.num { text-align: right; }
 .stats-table tfoot th { color: var(--text); border-top: 2px solid var(--border); padding: 8px; font-weight: 600; }
+
+/* ---------- survey check (CRM vs transcript) ---------- */
+
+.compare-panel { border-color: var(--warn); }
+.compare-summary { margin: 6px 0 0; }
+.compare-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.compare-item {
+  padding: 6px 8px; border-radius: 8px; background: var(--surface);
+  border-left: 3px solid var(--border); font-size: 0.9rem;
+}
+.compare-item.severity-ошибка { border-left-color: var(--danger); }
+.compare-item.severity-проверить { border-left-color: var(--warn); }
+.compare-item.severity-рекомендация { border-left-color: var(--ok); }
+.compare-item-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.compare-badge { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: var(--muted); }
+.severity-ошибка .compare-badge { color: var(--danger); }
+.severity-проверить .compare-badge { color: var(--warn); }
+.severity-рекомендация .compare-badge { color: var(--ok); }
+.compare-values { margin: 2px 0; }
+.link-btn:disabled { color: var(--ok); text-decoration: none; cursor: default; }

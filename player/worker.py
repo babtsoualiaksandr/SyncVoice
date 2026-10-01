@@ -7,8 +7,8 @@ import time
 from django.db import close_old_connections
 from django.utils import timezone
 
-from . import analysis
-from .models import AppSettings, AudioFile, CallAnalysis, PbxSync
+from . import analysis, compare
+from .models import AppSettings, AudioFile, CallAnalysis, CallComparison, PbxSync
 from .sync import run_sync
 from .transcription import transcribe
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 IDLE_SLEEP = 3
 ANALYSIS_BACKOFF = 60  # seconds to wait after a temporary Gemini failure
 _analysis_paused_until = 0.0
+_comparison_paused_until = 0.0
 
 
 def recover_interrupted() -> None:
@@ -40,6 +41,8 @@ def run_once() -> bool:
         return True
     if run_analysis_step():
         return True
+    if run_comparison_step():
+        return True
     audio = (
         AudioFile.objects.filter(status=AudioFile.Status.PENDING)
         .order_by('call_started_at', 'created_at').first()
@@ -57,6 +60,8 @@ def run_once() -> bool:
         audio.refresh_from_db()
         if audio.status == AudioFile.Status.DONE and analysis.enabled():
             analysis.queue(audio)
+        if audio.status == AudioFile.Status.DONE and compare.enabled():
+            compare.queue(audio)
         return True
     return False
 
@@ -104,3 +109,26 @@ def run_forever(stop: threading.Event | None = None) -> None:
             busy = False
         if not busy:
             stop.wait(IDLE_SLEEP)
+
+
+def run_comparison_step() -> bool:
+    """Check one queued call's CRM survey against its transcript. False when nothing to do."""
+    global _comparison_paused_until
+    if not compare.enabled() or time.monotonic() < _comparison_paused_until:
+        return False
+    item = (
+        CallComparison.objects.filter(status=CallComparison.Status.PENDING)
+        .select_related('audio').order_by('updated_at').first()
+    )
+    if not item:
+        return False
+    logger.info('Checking the CRM survey of #%s', item.audio_id)
+    try:
+        compare.run_comparison(item)
+    except analysis.RetryLater as exc:
+        logger.warning('Survey check postponed for %ss: %s', ANALYSIS_BACKOFF, exc)
+        item.error = str(exc)
+        item.save(update_fields=['error', 'updated_at'])
+        _comparison_paused_until = time.monotonic() + ANALYSIS_BACKOFF
+        return False
+    return True

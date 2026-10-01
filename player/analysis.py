@@ -18,12 +18,7 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_MS = 60_000
 
-SYSTEM_PROMPT = """\
-Ты помогаешь контролёру качества колл-центра «МедиаИзмеритель», который проводит телефонный опрос \
-о слушании белорусского радио. Тебе дают автоматическую расшифровку звонка. В ней много ошибок \
-распознавания: искажённые слова и названия радиостанций, реплики интервьюера и респондента \
-не разделены.
-
+QUESTIONNAIRE = """\
 Интервьюер идёт по анкете:
 1. Как к вам обращаться (имя).
 2. В каком населённом пункте постоянно проживаете: Брест, Витебск, Гомель, Гродно, Минск, Могилев. \
@@ -37,6 +32,15 @@ SYSTEM_PROMPT = """\
 9–12. Вчерашний день по периодам: утром, днём, вечером, ночью. По каждому периоду, когда слушал: \
 место (9.1), устройство (9.2), время (9.3), какие именно радиостанции (9.4), слушал ли ещё где-то (9.5).
 13–15. Образование, занятость, доля дохода на продукты. 16–17. Можно ли перезвонить, прощание.
+"""
+
+SYSTEM_PROMPT = """\
+Ты помогаешь контролёру качества колл-центра «МедиаИзмеритель», который проводит телефонный опрос \
+о слушании белорусского радио. Тебе дают автоматическую расшифровку звонка. В ней много ошибок \
+распознавания: искажённые слова и названия радиостанций, реплики интервьюера и респондента \
+не разделены.
+
+{questionnaire}
 
 Извлеки ответы респондента (не интервьюера):
 
@@ -128,19 +132,22 @@ def transcript_text(audio: AudioFile) -> str:
     )
 
 
-def suggest_fields(audio: AudioFile, client=None) -> tuple[SuggestedFields, dict]:
-    """Ask Gemini for the report fields. Returns (fields, usage)."""
+def generate(system: str, contents: str, schema, client=None):
+    """One structured Gemini request. Returns (parsed schema object, usage).
+
+    Raises RetryLater for temporary problems and AnalysisError for permanent ones.
+    """
     from google.genai import errors, types
 
     client = client or make_client()
     try:
         response = client.models.generate_content(
             model=settings.GEMINI_MODEL,
-            contents=f'Расшифровка звонка:\n\n{transcript_text(audio)}',
+            contents=contents,
             config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT.format(stations=station_directory.prompt_block()),
+                system_instruction=system,
                 response_mime_type='application/json',
-                response_schema=SuggestedFields,
+                response_schema=schema,
                 temperature=0,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             ),
@@ -158,15 +165,25 @@ def suggest_fields(audio: AudioFile, client=None) -> tuple[SuggestedFields, dict
     except httpx.HTTPError as exc:  # network errors, timeouts
         raise RetryLater(f'Нет связи с Gemini: {exc}')
 
-    fields = response.parsed
-    if not isinstance(fields, SuggestedFields):
+    parsed = response.parsed
+    if not isinstance(parsed, schema):
         raise AnalysisError(f'Gemini вернул ответ не по схеме: {(response.text or "")[:300]}')
     meta = response.usage_metadata
     usage = {
         'input_tokens': (meta and meta.prompt_token_count) or 0,
         'output_tokens': ((meta and meta.candidates_token_count) or 0) + ((meta and meta.thoughts_token_count) or 0),
     }
-    return fields, usage
+    return parsed, usage
+
+
+def suggest_fields(audio: AudioFile, client=None) -> tuple[SuggestedFields, dict]:
+    """Ask Gemini for the report fields. Returns (fields, usage)."""
+    return generate(
+        SYSTEM_PROMPT.format(stations=station_directory.prompt_block(), questionnaire=QUESTIONNAIRE),
+        f'Расшифровка звонка:\n\n{transcript_text(audio)}',
+        SuggestedFields,
+        client,
+    )
 
 
 def queue(audio: AudioFile) -> None:

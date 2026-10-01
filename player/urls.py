@@ -21,6 +21,7 @@ urlpatterns = [
     path('audio/<int:pk>/review/', views.review_save, name='review_save'),
     path('audio/<int:pk>/analysis/', views.analysis_status, name='analysis'),
     path('audio/<int:pk>/crm/', views.crm_lookup, name='crm_lookup'),
+    path('audio/<int:pk>/compare/', views.comparison_status, name='comparison'),
     path('audio/<int:pk>/crm/open/', views.crm_open, name='crm_open'),
     path('audio/<int:pk>/stream/', views.stream, name='stream'),
     path('audio/<int:pk>/subtitles/', views.subtitles, name='subtitles'),

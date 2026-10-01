@@ -220,3 +220,102 @@ def configured() -> bool:
     settings = AppSettings.load()
     return bool(settings.crm_url and settings.crm_username)
 
+
+
+# ---------- reading a survey's answers ----------
+
+# Profile fields on the survey page (input value / selected option text), by element id.
+PROFILE_FIELDS = {
+    'RespCity': 'Город',
+    'RespAge': 'Возраст',
+    'RespGender': 'Пол',
+    'RespEdStatus': 'Образование',
+    'RespWorkStatus': 'Занятость',
+    'RespIncome': 'Доля дохода на продукты питания',
+    'RespRecall': 'Можно ли перезвонить',
+}
+# Not sent anywhere: identifies the respondent, adds nothing to the check.
+PERSONAL_KEYS = {'MemberName', 'MemberID', 'Phone', 'RespName'}
+
+
+class _SurveyPageParser(HTMLParser):
+    """Values of the profile inputs/selects and the MembersSurveyID of the survey page."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.values: dict[str, str] = {}
+        self.members_survey_id = ''
+        self._select = None
+        self._option_selected = False
+        self._option_text = ''
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'input' and attrs.get('id') in PROFILE_FIELDS:
+            self.values[attrs['id']] = (attrs.get('value') or '').strip()
+        elif tag == 'select' and attrs.get('id') in PROFILE_FIELDS:
+            self._select = attrs['id']
+            self.values.setdefault(self._select, '')
+        elif tag == 'option' and self._select:
+            self._option_selected = 'selected' in attrs
+            self._option_text = ''
+        elif tag == 'script' and attrs.get('data-members'):
+            self.members_survey_id = attrs['data-members']
+
+    def handle_data(self, data):
+        if self._select:
+            self._option_text += data
+
+    def handle_endtag(self, tag):
+        if tag == 'option' and self._select:
+            if self._option_selected:
+                self.values[self._select] = ' '.join(self._option_text.split())
+            self._option_selected = False
+        elif tag == 'select':
+            self._select = None
+
+
+def parse_survey_page(html: str) -> tuple[dict, str]:
+    """({«Город»: «Минск», …}, MembersSurveyID) from a /admin/Reports/update<Id> page."""
+    parser = _SurveyPageParser()
+    parser.feed(html)
+    profile = {label: parser.values.get(field, '') for field, label in PROFILE_FIELDS.items()}
+    return profile, parser.members_survey_id
+
+
+def _without_personal(value):
+    if isinstance(value, dict):
+        return {k: _without_personal(v) for k, v in value.items() if k not in PERSONAL_KEYS}
+    if isinstance(value, list):
+        return [_without_personal(v) for v in value]
+    return value
+
+
+def fetch_answers(client: 'CrmClient', survey: Survey) -> dict:
+    """The operator's answers of `survey`, without name/phone/IDs, ready for the check.
+
+    {'Профиль': {...}, 'День «вчера»': '28.09.2026', 'Ответы о слушании': {...},
+     'Внесено': '29.09.2026 09:36:18'}
+    """
+    page = client.request('GET', survey.path)
+    profile, members_survey_id = parse_survey_page(page.text)
+    members_survey_id = members_survey_id or survey.members_survey_id
+    response = client.request('POST', 'admin/Reports/getMember', data={'MembersSurveyID': members_survey_id},
+                              headers={'X-Requested-With': 'XMLHttpRequest', 'Referer': client.url(survey.path)})
+    try:
+        member = response.json()
+    except ValueError:
+        raise CrmError('CRM вернула не данные анкеты (getMember) — проверьте права учётной записи SyncVoice.')
+    survey_day = ''
+    raw_day = (member.get('SurveyDate') or {}).get('date', '') if isinstance(member.get('SurveyDate'), dict) else ''
+    if raw_day:
+        try:
+            survey_day = datetime.strptime(raw_day[:10], '%Y-%m-%d').strftime('%d.%m.%Y')
+        except ValueError:
+            survey_day = raw_day[:10]
+    return {
+        'Профиль': profile,
+        'День «вчера»': survey_day,
+        'Ответы о слушании': _without_personal(member.get('SurveyDataJSON') or {}),
+        'Внесено': str(member.get('OPTime') or ''),
+    }

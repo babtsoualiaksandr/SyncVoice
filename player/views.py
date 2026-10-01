@@ -23,9 +23,9 @@ from django.views.decorators.http import require_GET, require_POST
 from .audio_utils import wav_duration
 from .credentials import CRM_SERVICE, SERVICE as PBX_SERVICE, get_password, set_password, store_name
 from .forms import AudioUploadForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
-from . import analysis, crm, stats
+from . import analysis, compare, crm, stats
 from . import stations as station_directory
-from .models import CITIES as STATION_CITIES, AppSettings, AudioFile, CallAnalysis, CallReview, Interviewer, PbxSync, RadioStation, parse_call_name
+from .models import CITIES as STATION_CITIES, AppSettings, AudioFile, CallAnalysis, CallComparison, CallReview, Interviewer, PbxSync, RadioStation, parse_call_name
 from .pbx import PbxError
 from .report import build_report, calls_for_day, report_filename
 from .subtitle_formats import FORMATS, export_filename
@@ -336,6 +336,8 @@ def detail(request, pk):
         'stations': [s for s in dict.fromkeys([*STATIONS, *station_directory.answer_names(), *used_stations]) if s],
         'ai_enabled': analysis.enabled(),
         'survey_url': audio.survey_url(),
+        'compare_enabled': compare.enabled(),
+        'comparison': _comparison_json(CallComparison.objects.filter(audio=audio).first()),
         'crm_lookup_url': reverse('player:crm_lookup', args=[audio.pk]) if crm.configured() and audio.phone else '',
         'ai': _analysis_json(_analysis_of(audio)),
         'prev_call': prev_call,
@@ -603,3 +605,27 @@ def stats_view(request):
     )
     rows, total = stats.interviewer_stats(calls)
     return render(request, 'player/stats.html', {'start': start, 'end': end, 'rows': rows, 'total': total})
+
+
+def _comparison_json(item):
+    if not item:
+        return None
+    return {
+        'status': item.status,
+        'discrepancies': item.discrepancies,
+        'summary': item.summary,
+        'error': item.error,
+        'survey_id': item.survey_id,
+    }
+
+
+def comparison_status(request, pk):
+    """GET: the survey check of the call (polled). POST: run it again."""
+    audio = get_object_or_404(AudioFile, pk=pk)
+    if request.method == 'POST':
+        if not compare.enabled():
+            return JsonResponse({'ok': False, 'message': 'Нужны настроенные CRM и Gemini.'}, status=400)
+        if audio.status != AudioFile.Status.DONE:
+            return JsonResponse({'ok': False, 'message': 'Сначала дождитесь расшифровки.'}, status=400)
+        compare.queue(audio)
+    return JsonResponse({'ok': True, 'comparison': _comparison_json(CallComparison.objects.filter(audio=audio).first())})

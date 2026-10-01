@@ -1,5 +1,6 @@
 import io
 import http.client
+import json
 import shutil
 import sys
 import tempfile
@@ -24,10 +25,11 @@ from django.utils import timezone
 from google.genai import errors as genai_errors
 
 from . import analysis, audio_paths, crm, crm_proxy, report, stations, worker
+from . import compare as compare_module
 from .analysis import SuggestedFields
 from . import forms as forms_module
 from .forms import SettingsForm
-from .models import AppSettings, AudioFile, CallAnalysis, CallReview, RadioStation, Interviewer, PbxSync, Segment, parse_call_name
+from .models import AppSettings, AudioFile, CallAnalysis, CallComparison, CallReview, RadioStation, Interviewer, PbxSync, Segment, parse_call_name
 from . import pbx
 from .pbx import FreePbxClient, PbxError, Recording, parse_cdr_html
 from .sync import run_sync
@@ -1256,6 +1258,13 @@ class CrmGatewayTests(TestCase):
             self.assertIn('Только просмотр', body.decode())
         self.client_.request.assert_not_called()
 
+    def test_delete_link_is_refused_even_as_get(self):
+        # The CRM's survey page links «Удалить анкету» to GET /admin/Reports/delete<Id>.
+        for path in ('/admin/Reports/delete200935', '/logout'):
+            status, _, _ = crm_proxy.proxy_response(self.client_, 'GET', path)
+            self.assertEqual(status, 405, path)
+        self.client_.request.assert_not_called()
+
     def test_background_data_load_is_forwarded(self):
         self.client_.url.side_effect = lambda path: 'http://192.168.12.230/' + path
         self.client_.request.return_value = crm_reply('{"answers": []}', headers={'Content-Type': 'application/json'})
@@ -1459,3 +1468,121 @@ class SortAndStatsTests(TestCase):
     def test_hms_filter(self):
         from player.templatetags.player_extras import hms
         self.assertEqual([hms(5), hms(312), hms(3723.4), hms(None)], ['0:05', '5:12', '1:02:03', ''])
+
+
+SURVEY_PAGE = """<html><body>
+<input class="w-50 max-h-row" id="RespName" type="text" value="Мария">
+<select name="RespCity" id="RespCity"><option value="1">Брест</option><option value="4" selected>Гомель</option>
+<option value="7">Минск</option></select>
+<input class="w-50 max-h-row" id="RespAge" type="Number" value="56">
+<select id="RespGender"><option value="1" selected>Женщина</option><option value="2">Мужчина</option></select>
+<select id="RespEdStatus"><option class="opt" value="3">Среднее специальное (техникум, колледж и т. д.)</option>
+<option class="opt" value="4" selected>Высшее (в том числе магистратура, аспирантура, соискательство)</option></select>
+<select id="RespWorkStatus"><option value="3" selected>Служащий</option></select>
+<select id="RespIncome"><option value="4">75 % и более</option><option value="3" selected>50-75%</option></select>
+<select id="RespRecall"><option value="1" selected>Да</option></select>
+<a href="/admin/Reports/delete200935">Удалить анкету</a>
+<script src="/assets/admin/Reports/js/UpdateScript.js" data-Members="258738"></script>
+</body></html>"""
+GET_MEMBER = {  # the shape of /admin/Reports/getMember, made-up person
+    'MemberName': 'Мария', 'DateOfBirth': '56', 'GenderID': 1, 'CityID': 4, 'MembersSurveyID': '258738',
+    'MemberID': '99999901', 'SurveyDate': {'date': '2026-09-24 00:00:00.000000', 'timezone_type': 3},
+    'SurveyDataJSON': {'WeekListening': {'flag': 'No'}, 'MemberID': '99999901'},
+    'OPUserID': 7, 'OPTime': '25-09-2026 09:34:01',
+}
+
+
+class CrmSurveyReadingTests(TestCase):
+    def test_parse_survey_page(self):
+        profile, members_id = crm.parse_survey_page(SURVEY_PAGE)
+        self.assertEqual(members_id, '258738')
+        self.assertEqual(profile['Город'], 'Гомель')
+        self.assertEqual(profile['Возраст'], '56')
+        self.assertEqual(profile['Образование'], 'Высшее (в том числе магистратура, аспирантура, соискательство)')
+        self.assertEqual(profile['Доля дохода на продукты питания'], '50-75%')
+        self.assertNotIn('Мария', json.dumps(profile, ensure_ascii=False))  # the name is not read
+
+    def test_fetch_answers_without_personal_data(self):
+        client = mock.Mock()
+        client.url.side_effect = lambda path: 'http://crm.local/' + path
+        client.request.side_effect = [crm_reply(SURVEY_PAGE), crm_reply('{}', json_data=GET_MEMBER)]
+        survey = crm.parse_survey(CRM_FIND[1])
+        answers = crm.fetch_answers(client, survey)
+        post = client.request.call_args_list[1]
+        self.assertEqual(post.args, ('POST', 'admin/Reports/getMember'))
+        self.assertEqual(post.kwargs['data'], {'MembersSurveyID': '258738'})
+        self.assertEqual(answers['День «вчера»'], '24.09.2026')
+        self.assertEqual(answers['Ответы о слушании'], {'WeekListening': {'flag': 'No'}})
+        text = json.dumps(answers, ensure_ascii=False)
+        self.assertNotIn('Мария', text)
+        self.assertNotIn('99999901', text)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-test')
+class SurveyCheckRunTests(TestCase):
+    RESULT = compare_module.Comparison(
+        discrepancies=[
+            compare_module.Discrepancy(field='Возраст', survey_value='26', call_value='26 неполных', time='0:31',
+                                       severity='ошибка', comment='следовало указать 25'),
+            compare_module.Discrepancy(field='Город', survey_value='Гомель', call_value='Гомель?', time='',
+                                       severity='странное', comment='уточнить'),
+        ],
+        summary='Есть ошибка в возрасте.',
+    )
+
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'crm_url': 'http://crm.local', 'crm_username': 'sv'})
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=self.audio, index=0, start=31, end=33, text='Мне 26 неполных.')
+        self.crm_client = mock.Mock()
+        self.crm_client.find.return_value = [crm.parse_survey(row) for row in CRM_FIND]
+
+    def run_check(self, result=None):
+        compare_module.queue(self.audio)
+        item = self.audio.comparison
+        fake = FakeGemini(result or self.RESULT)
+        with mock.patch('player.crm.fetch_answers', return_value={'Профиль': {'Возраст': '26'}}):
+            compare_module.run_comparison(item, gemini_client=fake, crm_client=self.crm_client)
+        item.refresh_from_db()
+        return item, fake
+
+    def test_discrepancies_saved(self):
+        item, fake = self.run_check()
+        self.assertEqual((item.status, item.survey_id), ('done', 200))
+        self.assertEqual(item.discrepancies[0]['comment'], 'следовало указать 25')
+        self.assertEqual(item.discrepancies[1]['severity'], 'проверить')  # unknown severity normalised
+        sent = fake.calls[0]['contents']
+        self.assertIn('[00:31] Мне 26 неполных.', sent)
+        self.assertNotIn(self.audio.phone, sent + fake.calls[0]['config'].system_instruction)
+
+    def test_no_survey_for_the_call(self):
+        self.crm_client.find.return_value = []
+        item, fake = self.run_check()
+        self.assertEqual(item.status, 'error')
+        self.assertIn('не найдена', item.error)
+        self.assertEqual(fake.calls, [])
+
+    def test_crm_down_is_retried(self):
+        self.crm_client.find.side_effect = crm.CrmError('CRM недоступна: timeout')
+        compare_module.queue(self.audio)
+        with self.assertRaises(analysis.RetryLater):
+            compare_module.run_comparison(self.audio.comparison, gemini_client=FakeGemini(self.RESULT),
+                                          crm_client=self.crm_client)
+
+    def test_endpoint_and_panel(self):
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, 'id="compare-panel"')
+        r = self.client.post(reverse('player:comparison', args=[self.audio.pk]))
+        self.assertEqual(r.json()['comparison']['status'], 'pending')
+
+    def test_worker_queues_check_after_transcription(self):
+        pending = make_call(CALL_B)
+
+        def fake_transcribe(audio):
+            Segment.objects.create(audio=audio, index=0, start=0, end=2, text='Минск.')
+            AudioFile.objects.filter(pk=audio.pk).update(status='done')
+
+        with mock.patch('player.worker.transcribe', side_effect=fake_transcribe), \
+                mock.patch('player.worker.run_analysis_step', return_value=False):
+            worker.run_once()
+        self.assertEqual(pending.comparison.status, CallComparison.Status.PENDING)

@@ -37,11 +37,18 @@ WRITE_PATH = re.compile(r'update|save|delete|remove|edit|create|add|store|insert
                         re.IGNORECASE)
 
 
+# Links that change data even as a plain GET (the survey page has
+# <a href="/admin/Reports/delete<Id>">Удалить анкету</a>) or end SyncVoice's session.
+DANGEROUS_GET_PATH = re.compile(r'delete|remove|drop|destroy|clear|reset|logout', re.IGNORECASE)
+
+
 def allowed(method: str, path: str, ajax: bool) -> bool:
-    """Viewing only: GET/HEAD, plus background data loads (XHR POST to a non-write address)."""
+    """Viewing only: GET/HEAD to non-destructive addresses, plus background data loads
+    (XHR POST to a non-write address)."""
+    address = urlsplit(path).path
     if method in ('GET', 'HEAD'):
-        return True
-    return method == 'POST' and ajax and not WRITE_PATH.search(urlsplit(path).path)
+        return not DANGEROUS_GET_PATH.search(address)
+    return method == 'POST' and ajax and not WRITE_PATH.search(address)
 
 
 def proxy_origin() -> str:

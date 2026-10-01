@@ -489,6 +489,11 @@
     if (!window.confirm('Удалить запись и её субтитры?')) e.preventDefault();
   });
 
+  // Other scripts (survey check) can jump to a moment of the call.
+  window.SyncVoicePlayer = {
+    seek(seconds) { seek(seconds); followPausedUntil = 0; audio.play(); },
+  };
+
   // ---------- init ----------
 
   setRate(RATES.includes(Number(load('rate'))) ? Number(load('rate')) : 1);

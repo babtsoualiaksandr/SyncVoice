@@ -37,6 +37,20 @@
     {{ ai|json_script:"ai-data" }}
     {% endif %}
 
+    {% if compare_enabled %}
+    <div class="ai-panel compare-panel" id="compare-panel" data-url="{% url 'player:comparison' audio.pk %}">
+      <div class="ai-panel-head">
+        <strong>Сверка с анкетой</strong>
+        <span class="hint" id="compare-status" role="status"></span>
+        <button class="btn btn-small" type="button" id="compare-run"
+                {% if audio.status != 'done' %}disabled title="Сначала дождитесь расшифровки"{% endif %}>Сверить</button>
+      </div>
+      <p class="hint compare-summary" id="compare-summary" hidden></p>
+      <ul class="compare-list" id="compare-list"></ul>
+    </div>
+    {{ comparison|json_script:"compare-data" }}
+    {% endif %}
+
     <div class="field-row">
       <div class="field">
         <label for="{{ f.city.id_for_label }}">Город проживания</label>

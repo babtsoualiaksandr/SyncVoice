@@ -314,6 +314,33 @@ class CallAnalysis(models.Model):
     FIELDS = ('city', 'listen_city', 'stations')
 
 
+class CallComparison(models.Model):
+    """Gemini's check of the operator's survey (CRM) against the call transcript."""
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'В очереди'
+        DONE = 'done', 'Готово'
+        ERROR = 'error', 'Ошибка'
+
+    audio = models.OneToOneField(AudioFile, on_delete=models.CASCADE, related_name='comparison')
+    status = models.CharField('статус', max_length=16, choices=Status, default=Status.PENDING)
+    survey_id = models.PositiveIntegerField('анкета CRM', null=True, blank=True)
+    discrepancies = models.JSONField('расхождения', default=list, blank=True)
+    summary = models.TextField('итог', blank=True)
+    model_name = models.CharField('модель', max_length=64, blank=True)
+    input_tokens = models.PositiveIntegerField('токенов на входе', default=0)
+    output_tokens = models.PositiveIntegerField('токенов на выходе', default=0)
+    error = models.TextField('ошибка', blank=True)
+    updated_at = models.DateTimeField('изменено', auto_now=True)
+
+    class Meta:
+        verbose_name = 'сверка с анкетой'
+        verbose_name_plural = 'сверки с анкетой'
+
+    def __str__(self):
+        return f'{self.audio} — {self.get_status_display()}'
+
+
 CITIES = ['Минск', 'Брест', 'Витебск', 'Гомель', 'Гродно', 'Могилев']
 
 
