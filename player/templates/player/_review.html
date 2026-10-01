@@ -1,0 +1,111 @@
+<aside class="card review" aria-labelledby="review-title">
+  {% with f=review_form %}
+  <form id="review-form" method="post" action="{% url 'player:review_save' audio.pk %}"
+        data-next-url="{% if next_unreviewed %}{{ next_unreviewed.get_absolute_url }}{% endif %}">
+    {% csrf_token %}
+    <div class="review-head">
+      <h2 id="review-title">Контроль</h2>
+      <span class="save-state" id="save-state" role="status">
+        {% if review.completed %}Проверен{% elif review %}Черновик сохранён{% endif %}
+      </span>
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label for="{{ f.interviewer.id_for_label }}">Интервьюер</label>
+        <input type="text" name="interviewer" id="{{ f.interviewer.id_for_label }}" list="interviewers"
+               value="{{ f.interviewer.value|default:'' }}">
+      </div>
+      <div class="field field-narrow">
+        <label for="{{ f.review_date.id_for_label }}">Дата контроля</label>
+        {{ f.review_date }}
+      </div>
+    </div>
+
+    {% if ai_enabled %}
+    <div class="ai-panel" id="ai-panel" data-url="{% url 'player:analysis' audio.pk %}">
+      <div class="ai-panel-head">
+        <strong>Подсказка ИИ</strong>
+        <span class="hint" id="ai-status" role="status"></span>
+        <button class="btn btn-small" type="button" id="ai-run"
+                {% if audio.status != 'done' %}disabled title="Сначала дождитесь расшифровки"{% endif %}>
+          Заполнить с ИИ
+        </button>
+      </div>
+      <p class="hint ai-notes" id="ai-notes" hidden></p>
+    </div>
+    {{ ai|json_script:"ai-data" }}
+    {% endif %}
+
+    <div class="field-row">
+      <div class="field">
+        <label for="{{ f.city.id_for_label }}">Город проживания</label>
+        {{ f.city }}
+        <div class="ai-hint" data-ai-field="city" hidden></div>
+      </div>
+      <div class="field">
+        <label for="{{ f.listen_city.id_for_label }}">Город слушания</label>
+        {{ f.listen_city }}
+        <div class="ai-hint" data-ai-field="listen_city" hidden></div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="{{ f.stations.id_for_label }}">Радиостанции / не слушал</label>
+      {{ f.stations }}
+      <div class="ai-hint" data-ai-field="stations" hidden></div>
+    </div>
+
+    <fieldset class="field result-field">
+      <legend>Результат</legend>
+      <div class="result-options">
+        {% for value, label in f.result.field.choices %}{% if value %}
+          <label class="result-option result-{{ value }}">
+            <input type="radio" name="result" value="{{ value }}" {% if f.result.value == value %}checked{% endif %}>
+            {{ label }}
+          </label>
+        {% endif %}{% endfor %}
+      </div>
+    </fieldset>
+
+    <div class="field field-check">
+      <label>{{ f.has_errors }} Есть ошибки</label>
+    </div>
+    <div class="field">
+      <label for="{{ f.error_comment.id_for_label }}">Комментарий к ошибкам / рекомендация</label>
+      {{ f.error_comment }}
+    </div>
+    <div class="field">
+      <label for="{{ f.note.id_for_label }}">Примечание</label>
+      {{ f.note }}
+    </div>
+
+    <details class="more-fields" {% if f.respondent_id.value or f.fixed.value %}open{% endif %}>
+      <summary>Ещё поля</summary>
+      <div class="field-row">
+        <div class="field">
+          <label for="{{ f.respondent_id.id_for_label }}">ID респондента</label>
+          {{ f.respondent_id }}
+        </div>
+        <div class="field">
+          <label for="{{ f.fixed.id_for_label }}">Исправлено</label>
+          {{ f.fixed }}
+        </div>
+        <div class="field field-narrow">
+          <label for="{{ f.controller.id_for_label }}">Контроль</label>
+          {{ f.controller }}
+        </div>
+      </div>
+    </details>
+
+    <button class="btn btn-primary btn-block" type="submit" id="complete-btn" title="Ctrl+Enter">
+      {% if next_unreviewed %}Готово → следующий{% else %}Готово{% endif %}
+    </button>
+    <p class="hint">Всё сохраняется автоматически. Ctrl+Enter — отметить проверенным и перейти к следующему.</p>
+  </form>
+  {% endwith %}
+
+  <datalist id="interviewers">{% for name in interviewer_choices %}<option value="{{ name }}">{% endfor %}</datalist>
+  <datalist id="cities">{% for c in cities %}<option value="{{ c }}">{% endfor %}</datalist>
+  <datalist id="stations">{% for s in stations %}<option value="{{ s }}">{% endfor %}</datalist>
+</aside>

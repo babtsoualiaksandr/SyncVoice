@@ -80,6 +80,8 @@ class AudioUploadForm(forms.Form):
         return cleaned
 
 
+SURVEY_PLACEHOLDERS = {'phone', 'phone_local', 'date', 'date_ru', 'time', 'operator', 'call_id'}
+
 _INTERVIEWER_LINE_RE = re.compile(r'^\s*(\d+)\s+(.+?)\s*$')
 
 
@@ -104,13 +106,22 @@ class SettingsForm(forms.ModelForm):
 
     class Meta:
         model = AppSettings
-        fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration', 'max_duration']
+        fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration', 'max_duration', 'survey_url']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['interviewers'].initial = '\n'.join(
             f'{i.extension} {i.name}' for i in Interviewer.objects.all()
         )
+
+    def clean_survey_url(self):
+        url = self.cleaned_data['survey_url'].strip()
+        if url and not re.match(r'^https?://', url):
+            url = 'http://' + url
+        unknown = set(re.findall(r'\{(\w+)\}', url)) - SURVEY_PLACEHOLDERS
+        if unknown:
+            raise forms.ValidationError(f'Неизвестные подстановки: {", ".join(sorted(unknown))}')
+        return url
 
     def clean_interviewers(self):
         pairs = []

@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from django.db import models
 from django.urls import reverse
@@ -54,6 +55,12 @@ class AppSettings(models.Model):
     max_duration = models.PositiveIntegerField(
         'макс. длительность звонка, с', default=900,
         help_text='Длиннее не скачиваются. 0 — без ограничения.',
+    )
+    survey_url = models.CharField(
+        'ссылка на анкету оператора', max_length=500, blank=True,
+        help_text='Адрес страницы CRM с ответами респондента. Подстановки: {phone} — 375291234567, '
+                  '{phone_local} — 291234567, {date} — 2026-09-29, {date_ru} — 29.09.2026, '
+                  '{time} — 14:01, {operator} — 301, {call_id}. Пусто — панели анкеты нет.',
     )
     worker_seen_at = models.DateTimeField(null=True, blank=True, editable=False)
 
@@ -175,6 +182,27 @@ class AudioFile(models.Model):
 
     def get_absolute_url(self):
         return reverse('player:detail', args=[self.pk])
+
+    def survey_url(self) -> str | None:
+        """Link to this respondent's answers in the operators' CRM, or None."""
+        template = AppSettings.load().survey_url.strip()
+        if not template or not self.phone:
+            return None
+        started = timezone.localtime(self.call_started_at) if self.call_started_at else None
+        values = {
+            'phone': self.phone,
+            'phone_local': self.phone[3:] if self.phone.startswith('375') else self.phone,
+            'date': f'{started:%Y-%m-%d}' if started else '',
+            'date_ru': f'{started:%d.%m.%Y}' if started else '',
+            'time': f'{started:%H:%M}' if started else '',
+            'operator': self.operator,
+            'call_id': self.call_id,
+        }
+        return re.sub(
+            r'\{(\w+)\}',
+            lambda m: quote(values[m[1]], safe='') if m[1] in values else m[0],
+            template,
+        )
 
     def default_interviewer(self) -> str:
         """Interviewer last chosen for this extension, else the first one known, else the bare number."""

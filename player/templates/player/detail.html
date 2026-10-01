@@ -3,240 +3,65 @@
 
 {% block title %}{% if audio.call_id %}{{ audio.phone_display }}{% else %}{{ audio }}{% endif %} — SyncVoice{% endblock %}
 
-{% block page_class %}page-wide{% endblock %}
+{% block page_class %}page-full{% endblock %}
 
 {% block content %}
-{% if audio.call_started_at %}
-<nav class="call-nav">
-  <a href="{% url 'player:index' %}?day={{ audio.call_started_at|date:'Y-m-d' }}">← Все звонки за {{ audio.call_started_at|date:"d.m.Y" }}</a>
-  <span>
-    {% if prev_call %}<a href="{{ prev_call.get_absolute_url }}" title="Alt+←">‹ Предыдущий</a>{% endif %}
-    {% if next_call %}<a href="{{ next_call.get_absolute_url }}" title="Alt+→">Следующий ›</a>{% endif %}
-  </span>
-</nav>
-{% endif %}
-
-<div class="player-head">
-  {% if audio.call_id %}
-    <div>
-      <h1>{{ audio.phone_display }}</h1>
-      <dl class="call-info">
-        <div><dt>Внутр. номер</dt><dd>{{ audio.operator }}</dd></div>
-        <div><dt>Дата</dt><dd>{{ audio.call_started_at|date:"d.m.Y" }}</dd></div>
-        <div><dt>Время</dt><dd>{{ audio.call_started_at|time:"H:i:s" }}</dd></div>
-        {% if audio.duration %}<div><dt>Длительность</dt><dd>{{ audio.duration|floatformat:0 }} с</dd></div>{% endif %}
-      </dl>
-    </div>
-  {% else %}
-    <h1>{{ audio }}</h1>
+<header class="call-bar">
+  {% if audio.call_started_at %}
+    <a class="call-back" href="{% url 'player:index' %}?day={{ audio.call_started_at|date:'Y-m-d' }}"
+       title="Все звонки за {{ audio.call_started_at|date:'d.m.Y' }}">← {{ audio.call_started_at|date:"d.m.Y" }}</a>
+    <span class="call-step">
+      {% if prev_call %}<a href="{{ prev_call.get_absolute_url }}" title="Предыдущий звонок (Alt+←)">‹</a>{% else %}<span>‹</span>{% endif %}
+      {% if next_call %}<a href="{{ next_call.get_absolute_url }}" title="Следующий звонок (Alt+→)">›</a>{% else %}<span>›</span>{% endif %}
+    </span>
   {% endif %}
-  <div class="player-actions">
+  <h1 class="call-title">
+    {% if audio.phone %}
+      <button type="button" class="phone-copy" id="phone-copy" data-copy="{{ audio.phone }}"
+              title="Скопировать номер {{ audio.phone }}">{{ audio.phone_display }}</button>
+      <span class="copy-note ok-text" id="phone-copy-note" role="status" hidden>Скопировано ✓</span>
+    {% else %}{{ audio }}{% endif %}
+  </h1>
+  <span class="call-meta">
+    {% if audio.operator %}<span>внутр. <b>{{ audio.operator }}</b></span>{% endif %}
+    {% if audio.call_started_at %}<span><b>{{ audio.call_started_at|date:"d.m.Y" }} {{ audio.call_started_at|time:"H:i:s" }}</b></span>{% endif %}
+    {% if audio.duration %}<span><b>{{ audio.duration|floatformat:0 }} с</b></span>{% endif %}
+  </span>
+  <span class="call-actions">
     <span id="status" class="status status-{{ audio.status }}">{{ audio.get_status_display }}</span>
-    <form method="post" action="{% url 'player:retranscribe' audio.pk %}">
-      {% csrf_token %}
-      <button class="btn" type="submit">Распознать заново</button>
-    </form>
-    <form method="post" action="{% url 'player:delete' audio.pk %}" id="delete-form">
-      {% csrf_token %}
-      <button class="btn btn-danger" type="submit" id="delete-btn">Удалить</button>
-    </form>
-  </div>
-</div>
-
-<div class="detail-layout">
-<div class="detail-main">
-<section class="card player" id="player"
-         data-stream-url="{% url 'player:stream' audio.pk %}"
-         data-subtitles-url="{% url 'player:subtitles' audio.pk %}"
-         {% if audio.duration %}data-duration="{{ audio.duration|stringformat:'f' }}"{% endif %}>
-  <audio id="audio" preload="metadata" src="{% url 'player:stream' audio.pk %}"></audio>
-
-  <div class="caption" id="caption" aria-live="polite"></div>
-
-  <div class="timeline" id="timeline" role="slider" tabindex="0"
-       aria-label="Позиция воспроизведения" aria-valuemin="0" aria-valuenow="0">
-    <div class="timeline-track">
-      <div class="timeline-buffered" id="buffered"></div>
-      <div class="timeline-segments" id="segment-marks"></div>
-      <div class="timeline-progress" id="progress"></div>
-      <div class="timeline-thumb" id="thumb"></div>
-    </div>
-    <div class="timeline-tooltip" id="tooltip" hidden></div>
-  </div>
-
-  <div class="time-row">
-    <span id="current-time">0:00</span>
-    <span id="duration">0:00</span>
-  </div>
-
-  <div class="controls">
-    <div class="controls-group">
-      <button class="icon-btn" id="prev-seg" title="Предыдущая фраза (↑)">⏮</button>
-      <button class="icon-btn" id="back" title="Назад 5 с (←)">−5</button>
-      <button class="icon-btn play" id="play" title="Играть / пауза (пробел)">▶</button>
-      <button class="icon-btn" id="forward" title="Вперёд 5 с (→)">+5</button>
-      <button class="icon-btn" id="next-seg" title="Следующая фраза (↓)">⏭</button>
-    </div>
-
-    <div class="controls-group speed" id="speed" role="group" aria-label="Скорость">
-      <button data-rate="0.5">0.5×</button>
-      <button data-rate="0.75">0.75×</button>
-      <button data-rate="1">1×</button>
-      <button data-rate="1.25">1.25×</button>
-      <button data-rate="1.5">1.5×</button>
-      <button data-rate="1.75">1.75×</button>
-      <button data-rate="2">2×</button>
-    </div>
-
-    <div class="controls-group">
-      <button class="toggle" id="loop-seg" aria-pressed="false" title="Повторять текущую фразу (L)">↻ Фраза</button>
-      <button class="icon-btn" id="mute" title="Звук (M)">🔊</button>
-      <input type="range" id="volume" min="0" max="1" step="0.05" value="1" aria-label="Громкость">
-    </div>
-  </div>
-  <p class="hint keys">Пробел — пауза · ←/→ — 5 с · ↑/↓ — фраза · [ ] — скорость · L — повтор фразы · M — звук</p>
-</section>
-
-<section class="card transcript-card">
-  <div class="transcript-head">
-    <h2>Субтитры</h2>
-    <input type="search" id="search" placeholder="Поиск по тексту…" aria-label="Поиск по субтитрам">
-    <button class="toggle" id="follow" aria-pressed="true" title="Прокручивать к текущей фразе">Следовать</button>
-    <details class="save-menu" id="save-menu" {% if audio.status != 'done' %}hidden{% endif %}>
-      <summary class="btn btn-primary">Сохранить субтитры</summary>
-      <div class="save-menu-list">
-        <button type="button" id="copy-subtitles" data-url="{% url 'player:download_subtitles' audio.pk 'txt' %}">
-          <strong>В буфер обмена</strong><span>Текст с временем — вставить в письмо, чат, документ</span>
-        </button>
-        <a href="{% url 'player:download_subtitles' audio.pk 'txt' %}" download>
-          <strong>TXT</strong><span>Текст с временем, для чтения</span>
-        </a>
-        <a href="{% url 'player:download_subtitles' audio.pk 'srt' %}" download>
-          <strong>SRT</strong><span>Субтитры для видеоплееров</span>
-        </a>
-        <a href="{% url 'player:download_subtitles' audio.pk 'vtt' %}" download>
-          <strong>VTT</strong><span>Субтитры для браузеров (WebVTT)</span>
-        </a>
+    <details class="more-menu">
+      <summary class="btn btn-small" title="Ещё действия">⋯</summary>
+      <div class="more-menu-list">
+        <form method="post" action="{% url 'player:retranscribe' audio.pk %}">
+          {% csrf_token %}
+          <button type="submit">Распознать заново</button>
+        </form>
+        <form method="post" action="{% url 'player:delete' audio.pk %}" id="delete-form">
+          {% csrf_token %}
+          <button type="submit" id="delete-btn" class="danger">Удалить запись</button>
+        </form>
       </div>
     </details>
-  </div>
-  <div class="transcript" id="transcript">
-    <p class="hint" id="transcript-empty">Загрузка…</p>
-  </div>
-</section>
-</div>
+  </span>
+</header>
 
-<aside class="card review" aria-labelledby="review-title">
-  {% with f=review_form %}
-  <form id="review-form" method="post" action="{% url 'player:review_save' audio.pk %}"
-        data-next-url="{% if next_unreviewed %}{{ next_unreviewed.get_absolute_url }}{% endif %}">
-    {% csrf_token %}
-    <div class="review-head">
-      <h2 id="review-title">Контроль</h2>
-      <span class="save-state" id="save-state" role="status">
-        {% if review.completed %}Проверен{% elif review %}Черновик сохранён{% endif %}
-      </span>
-    </div>
-
-    <div class="field-row">
-      <div class="field">
-        <label for="{{ f.interviewer.id_for_label }}">Интервьюер</label>
-        <input type="text" name="interviewer" id="{{ f.interviewer.id_for_label }}" list="interviewers"
-               value="{{ f.interviewer.value|default:'' }}">
-      </div>
-      <div class="field field-narrow">
-        <label for="{{ f.review_date.id_for_label }}">Дата контроля</label>
-        {{ f.review_date }}
-      </div>
-    </div>
-
-    {% if ai_enabled %}
-    <div class="ai-panel" id="ai-panel" data-url="{% url 'player:analysis' audio.pk %}">
-      <div class="ai-panel-head">
-        <strong>Подсказка ИИ</strong>
-        <span class="hint" id="ai-status" role="status"></span>
-        <button class="btn btn-small" type="button" id="ai-run"
-                {% if audio.status != 'done' %}disabled title="Сначала дождитесь расшифровки"{% endif %}>
-          Заполнить с ИИ
-        </button>
-      </div>
-      <p class="hint ai-notes" id="ai-notes" hidden></p>
-    </div>
-    {{ ai|json_script:"ai-data" }}
-    {% endif %}
-
-    <div class="field-row">
-      <div class="field">
-        <label for="{{ f.city.id_for_label }}">Город проживания</label>
-        {{ f.city }}
-        <div class="ai-hint" data-ai-field="city" hidden></div>
-      </div>
-      <div class="field">
-        <label for="{{ f.listen_city.id_for_label }}">Город слушания</label>
-        {{ f.listen_city }}
-        <div class="ai-hint" data-ai-field="listen_city" hidden></div>
-      </div>
-    </div>
-
-    <div class="field">
-      <label for="{{ f.stations.id_for_label }}">Радиостанции / не слушал</label>
-      {{ f.stations }}
-      <div class="ai-hint" data-ai-field="stations" hidden></div>
-    </div>
-
-    <fieldset class="field result-field">
-      <legend>Результат</legend>
-      <div class="result-options">
-        {% for value, label in f.result.field.choices %}{% if value %}
-          <label class="result-option result-{{ value }}">
-            <input type="radio" name="result" value="{{ value }}" {% if f.result.value == value %}checked{% endif %}>
-            {{ label }}
-          </label>
-        {% endif %}{% endfor %}
-      </div>
-    </fieldset>
-
-    <div class="field field-check">
-      <label>{{ f.has_errors }} Есть ошибки</label>
-    </div>
-    <div class="field">
-      <label for="{{ f.error_comment.id_for_label }}">Комментарий к ошибкам / рекомендация</label>
-      {{ f.error_comment }}
-    </div>
-    <div class="field">
-      <label for="{{ f.note.id_for_label }}">Примечание</label>
-      {{ f.note }}
-    </div>
-
-    <details class="more-fields" {% if f.respondent_id.value or f.fixed.value %}open{% endif %}>
-      <summary>Ещё поля</summary>
-      <div class="field-row">
-        <div class="field">
-          <label for="{{ f.respondent_id.id_for_label }}">ID респондента</label>
-          {{ f.respondent_id }}
-        </div>
-        <div class="field">
-          <label for="{{ f.fixed.id_for_label }}">Исправлено</label>
-          {{ f.fixed }}
-        </div>
-        <div class="field field-narrow">
-          <label for="{{ f.controller.id_for_label }}">Контроль</label>
-          {{ f.controller }}
-        </div>
-      </div>
-    </details>
-
-    <button class="btn btn-primary btn-block" type="submit" id="complete-btn" title="Ctrl+Enter">
-      {% if next_unreviewed %}Готово → следующий{% else %}Готово{% endif %}
+<div class="panes" id="panes">
+  <div class="pane" data-pane="main" data-title="Плеер и субтитры">
+    {% include 'player/_player.html' %}
+    <button type="button" class="focus-back" id="focus-back" hidden>
+      Клавиши плеера сейчас уходят в анкету — щёлкните здесь, чтобы вернуть их
     </button>
-    <p class="hint">Всё сохраняется автоматически. Ctrl+Enter — отметить проверенным и перейти к следующему.</p>
-  </form>
-  {% endwith %}
-
-  <datalist id="interviewers">{% for name in interviewer_choices %}<option value="{{ name }}">{% endfor %}</datalist>
-  <datalist id="cities">{% for c in cities %}<option value="{{ c }}">{% endfor %}</datalist>
-  <datalist id="stations">{% for s in stations %}<option value="{{ s }}">{% endfor %}</datalist>
-</aside>
+  </div>
+  <div class="splitter" role="separator" aria-orientation="vertical" tabindex="0" title="Перетащите, чтобы изменить ширину"></div>
+  {% if survey_url %}
+  <div class="pane pane-flex" data-pane="survey" data-title="Анкета оператора">
+    {% include 'player/_survey.html' %}
+  </div>
+  <div class="splitter" role="separator" aria-orientation="vertical" tabindex="0" title="Перетащите, чтобы изменить ширину"></div>
+  {% endif %}
+  <div class="pane{% if not survey_url %} pane-flex{% endif %}" data-pane="review" data-title="Контроль">
+    {% include 'player/_review.html' %}
+  </div>
 </div>
 {% endblock %}
 
@@ -244,6 +69,8 @@
 <script src="{% static 'player/player.js' %}"></script>
 <script src="{% static 'player/review.js' %}"></script>
 <script src="{% static 'player/ai.js' %}"></script>
+<script src="{% static 'player/panes.js' %}"></script>
+<script src="{% static 'player/callbar.js' %}"></script>
 <script>
   // Alt+←/→ — previous/next call of the day.
   document.addEventListener('keydown', (e) => {

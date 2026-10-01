@@ -10,7 +10,9 @@ from unittest import mock
 
 import httpx
 import openpyxl
+import requests
 from django import forms
+from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -1056,3 +1058,94 @@ class StationDirectoryTests(TestCase):
         stations.import_workbook(make_stations_xlsx())
         audio = make_call(CALL_A)
         self.assertContains(self.client.get(audio.get_absolute_url()), '<option value="Юмор">')
+
+
+SURVEY = 'http://crm.local/answers?phone={phone}&local={phone_local}&d={date}&ru={date_ru}&t={time}&op={operator}&id={call_id}'
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class SurveyLinkTests(TestCase):
+    def setUp(self):
+        self.audio = make_call(CALL_A)  # 375290000103, ext 308, 2026-09-25 09:32:15
+
+    def test_all_placeholders(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'survey_url': SURVEY})
+        self.assertEqual(
+            self.audio.survey_url(),
+            'http://crm.local/answers?phone=375290000103&local=290000103&d=2026-09-25'
+            '&ru=25.09.2026&t=09%3A32&op=308&id=1790000001.100',
+        )
+
+    def test_no_template_or_phone(self):
+        self.assertIsNone(self.audio.survey_url())
+        AppSettings.objects.update_or_create(pk=1, defaults={'survey_url': SURVEY})
+        self.audio.phone = ''
+        self.assertIsNone(self.audio.survey_url())
+
+    def test_unknown_placeholder_rejected_and_scheme_added(self):
+        base = {'min_duration': 80, 'max_duration': 900}
+        form = SettingsForm({**base, 'survey_url': 'crm.local/a?p={phone}'}, instance=AppSettings.load())
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['survey_url'], 'http://crm.local/a?p={phone}')
+        form = SettingsForm({**base, 'survey_url': 'http://crm.local/a?p={tel}'}, instance=AppSettings.load())
+        self.assertFalse(form.is_valid())
+        self.assertIn('Неизвестные подстановки: tel', str(form.errors))
+
+    def test_phone_in_header_copies_digits(self):
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, 'id="phone-copy" data-copy="375290000103"')
+        self.assertContains(r, 'callbar.js')
+
+    def test_call_page_has_survey_pane(self):
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertNotContains(r, 'data-pane="survey"')
+        AppSettings.objects.update_or_create(pk=1, defaults={'survey_url': 'http://crm.local/a?p={phone}'})
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, 'data-pane="survey"')
+        self.assertContains(r, 'data-url="http://crm.local/a?p=375290000103"')
+        self.assertContains(r, 'id="survey-frame"')
+        self.assertContains(r, 'data-pane="review"')  # the review form is still there
+
+
+class SurveyCheckTests(TestCase):
+    URL = 'http://crm.local/a?p=375290000103'
+
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'survey_url': 'http://crm.local/a?p={phone}'})
+        cache.clear()
+
+    def check(self, headers=None, error=None, url=URL):
+        reply = mock.Mock(headers=headers or {})
+        with mock.patch('player.views.requests.Session.get', return_value=reply, side_effect=error) as get:
+            r = self.client.get(reverse('player:survey_check'), {'url': url})
+        return r, get
+
+    def test_embeddable(self):
+        r, _ = self.check()
+        self.assertEqual(r.json(), {'ok': True, 'embeddable': True, 'reason': ''})
+
+    def test_x_frame_options(self):
+        r, _ = self.check({'X-Frame-Options': 'SAMEORIGIN'})
+        self.assertFalse(r.json()['embeddable'])
+        self.assertIn('SAMEORIGIN', r.json()['reason'])
+
+    def test_frame_ancestors(self):
+        r, _ = self.check({'Content-Security-Policy': "default-src 'self'; frame-ancestors 'self'"})
+        self.assertFalse(r.json()['embeddable'])
+        cache.clear()
+        r, _ = self.check({'Content-Security-Policy': 'frame-ancestors http://127.0.0.1:8765'})
+        self.assertTrue(r.json()['embeddable'])
+
+    def test_unreachable(self):
+        r, _ = self.check(error=requests.exceptions.ConnectionError('refused'))
+        self.assertIsNone(r.json()['embeddable'])
+
+    def test_other_hosts_refused(self):
+        r, get = self.check(url='http://example.com/secret')
+        self.assertEqual(r.status_code, 400)
+        get.assert_not_called()
+
+    def test_cached_per_host(self):
+        self.check()
+        _, get = self.check()
+        get.assert_not_called()

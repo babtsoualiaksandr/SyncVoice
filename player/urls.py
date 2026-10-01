@@ -10,6 +10,7 @@ urlpatterns = [
     path('settings/', views.settings_view, name='settings'),
     path('settings/test-connection/', views.test_connection, name='test_connection'),
     path('stations/', views.stations_view, name='stations'),
+    path('survey/check/', views.survey_check, name='survey_check'),
     path('stations/import/', views.stations_import, name='stations_import'),
     path('pbx/sync/', views.sync_start, name='sync_start'),
     path('status/', views.status, name='status'),

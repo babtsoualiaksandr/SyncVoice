@@ -1,8 +1,13 @@
 import mimetypes
 import re
+import warnings
 from datetime import timedelta
+from urllib.parse import urlsplit
 
+import requests
+import urllib3
 from django.contrib import messages
+from django.core.cache import cache
 from django.db.models import Count, Q
 from django.db.models.functions import TruncDate
 from django.http import FileResponse, Http404, HttpResponse, JsonResponse
@@ -177,6 +182,8 @@ def settings_view(request):
         'password_saved': bool(get_password(username)),
         'password_username': username,
         'password_store': store_name(),
+        'survey_example_call': (example := AudioFile.objects.exclude(phone='').first()),
+        'survey_example': example.survey_url() if example else None,
     })
 
 
@@ -281,6 +288,7 @@ def detail(request, pk):
         'cities': CITIES,
         'stations': [s for s in dict.fromkeys([*STATIONS, *station_directory.answer_names(), *used_stations]) if s],
         'ai_enabled': analysis.enabled(),
+        'survey_url': audio.survey_url(),
         'ai': _analysis_json(_analysis_of(audio)),
         'prev_call': prev_call,
         'next_call': next_call,
@@ -430,3 +438,52 @@ def stream(request, pk):
     response['Content-Length'] = str(length)
     response['Accept-Ranges'] = 'bytes'
     return response
+
+
+def frame_policy(url: str) -> tuple[bool | None, str]:
+    """Can `url` be shown in an <iframe> on SyncVoice's page?
+
+    Looks at X-Frame-Options and CSP frame-ancestors of the reply (fetched
+    without the user's CRM session, so usually the login page — CRMs send
+    the same headers there). (None, reason) when the CRM can't be reached.
+    """
+    try:
+        with warnings.catch_warnings(), requests.Session() as session:
+            warnings.simplefilter('ignore', urllib3.exceptions.InsecureRequestWarning)  # self-signed LAN CRM
+            session.trust_env = False  # straight to the CRM, not through system proxy variables
+            response = session.get(url, timeout=5, stream=True, verify=False, allow_redirects=True)
+        response.close()
+    except requests.exceptions.RequestException as exc:
+        return None, f'CRM недоступна с этого компьютера: {exc.__class__.__name__}'
+    xfo = response.headers.get('X-Frame-Options', '').strip().lower()
+    if xfo:
+        return False, f'CRM запрещает показ внутри других страниц (X-Frame-Options: {xfo.upper()})'
+    for directive in response.headers.get('Content-Security-Policy', '').split(';'):
+        parts = directive.split()
+        if parts and parts[0].lower() == 'frame-ancestors':
+            sources = [p.strip("'").lower() for p in parts[1:]]
+            if '*' in sources or any('127.0.0.1' in s or 'localhost' in s for s in sources):
+                break
+            return False, f'CRM запрещает показ внутри других страниц (frame-ancestors {" ".join(parts[1:])})'
+    return True, ''
+
+
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f'{parts.scheme}://{parts.netloc}'.lower()
+
+
+@require_GET
+def survey_check(request):
+    """Whether the CRM page can be embedded (polled once by the call page)."""
+    url = request.GET.get('url', '')
+    template = AppSettings.load().survey_url
+    if not template or not url or _origin(url) != _origin(template):
+        return JsonResponse({'ok': False, 'message': 'Адрес не совпадает с CRM из настроек.'}, status=400)
+    key = f'survey-frame:{_origin(url)}'
+    result = cache.get(key)
+    if result is None:
+        result = frame_policy(url)
+        cache.set(key, result, 600)
+    embeddable, reason = result
+    return JsonResponse({'ok': True, 'embeddable': embeddable, 'reason': reason})

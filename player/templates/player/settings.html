@@ -45,6 +45,17 @@
       {% endfor %}
     </fieldset>
 
+    <fieldset>
+      <legend>Анкета операторов (CRM)</legend>
+      {% with field=form.survey_url %}{% include 'player/_field.html' %}{% endwith %}
+      {% if survey_example %}
+        <p class="hint">Пример для последнего звонка ({{ survey_example_call.phone_display }}):
+          <a href="{{ survey_example }}" target="_blank" rel="noopener noreferrer">{{ survey_example }}</a></p>
+      {% endif %}
+      <p class="hint">Страница анкеты показывается на странице звонка рядом с плеером.
+        Если CRM не разрешает показ внутри другой страницы, её можно открыть отдельным окном рядом.</p>
+    </fieldset>
+
     <button class="btn btn-primary" type="submit">Сохранить</button>
   </form>
 </section>
