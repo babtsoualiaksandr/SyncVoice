@@ -1091,6 +1091,16 @@ class SurveyLinkTests(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn('Неизвестные подстановки: tel', str(form.errors))
 
+    def test_survey_links_of_neighbouring_calls(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'survey_url': 'http://crm.local/a?p={phone}'})
+        other = make_call(CALL_B)  # the next call of the same day
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, 'id="next-call" data-survey-url="http://crm.local/a?p=375290000104"')
+        data = {'interviewer': '308', 'review_date': '2026-09-26', 'complete': '1'}
+        saved = self.client.post(reverse('player:review_save', args=[self.audio.pk]), data).json()
+        self.assertEqual(saved['next_url'], other.get_absolute_url())
+        self.assertEqual(saved['next_survey_url'], 'http://crm.local/a?p=375290000104')
+
     def test_phone_in_header_copies_digits(self):
         r = self.client.get(self.audio.get_absolute_url())
         self.assertContains(r, 'id="phone-copy" data-copy="375290000103"')

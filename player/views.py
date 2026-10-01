@@ -328,6 +328,7 @@ def review_save(request, pk):
         'ok': True,
         'completed': review.completed,
         'next_url': next_unreviewed.get_absolute_url() if next_unreviewed else None,
+        'next_survey_url': next_unreviewed.survey_url() if next_unreviewed else None,
     })
 
 

@@ -52,7 +52,10 @@
     await saving;
     try {
       const data = await save(true);
-      if (data.next_url) window.location.href = data.next_url;
+      if (data.next_url) {
+        window.SyncVoiceSurvey?.follow(data.next_survey_url); // still within the key/click gesture
+        window.location.href = data.next_url;
+      }
     } catch (e) { /* message already shown */ }
   }
 

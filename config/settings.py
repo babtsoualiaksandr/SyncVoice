@@ -38,6 +38,10 @@ DEBUG = True
 # The app runs locally on the user's machine (waitress binds to 127.0.0.1).
 ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
+# Keep the link to the CRM survey window we open, so «Окно рядом» is reused
+# (Django's default 'same-origin' cuts it and every call opens a new window).
+SECURE_CROSS_ORIGIN_OPENER_POLICY = 'same-origin-allow-popups'
+
 
 # Application definition
 

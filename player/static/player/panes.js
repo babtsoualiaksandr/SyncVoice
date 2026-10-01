@@ -173,13 +173,26 @@
     try { return localStorage.getItem(PREFER_KEY) === '1'; } catch (e) { return false; }
   }
 
-  function openWindow() {
+  function openWindow(target = url) {
     const half = Math.round(screen.availWidth / 2);
-    const win = window.open(url, 'syncvoice-survey',
+    // The same window name: an open survey window is reused, not duplicated.
+    const win = window.open(target, 'syncvoice-survey',
       `left=${half},top=0,width=${half},height=${screen.availHeight}`);
     if (!win) {
       showBlocked('Браузер заблокировал всплывающее окно — разрешите всплывающие окна для этого адреса.');
     }
+    return win;
+  }
+
+  // In window mode the survey window follows the controller to the next call.
+  // Must run inside the click/key gesture, or the browser blocks the window.
+  window.SyncVoiceSurvey = {
+    follow(nextUrl) {
+      if (prefer() && nextUrl) openWindow(nextUrl);
+    },
+  };
+  for (const link of document.querySelectorAll('#prev-call, #next-call')) {
+    link.addEventListener('click', () => window.SyncVoiceSurvey.follow(link.dataset.surveyUrl));
   }
 
   function showBlocked(reason) {
@@ -198,7 +211,8 @@
   async function start() {
     preferWindow.checked = prefer();
     if (preferWindow.checked) {
-      showBlocked('Анкета открывается отдельным окном (так выбрано ниже).');
+      showBlocked('Анкета открывается отдельным окном и сама переключается на нужного респондента, '
+                  + 'когда вы переходите к другому звонку (‹ ›, Alt+←/→, «Готово → следующий»).');
       return;
     }
     try {
@@ -215,8 +229,8 @@
   document.getElementById('survey-reload').addEventListener('click', () => {
     if (!frame.hidden) frame.src = url;
   });
-  document.getElementById('survey-window').addEventListener('click', openWindow);
-  document.getElementById('survey-blocked-open').addEventListener('click', openWindow);
+  document.getElementById('survey-window').addEventListener('click', () => openWindow());
+  document.getElementById('survey-blocked-open').addEventListener('click', () => openWindow());
   preferWindow.addEventListener('change', () => {
     try { localStorage.setItem(PREFER_KEY, preferWindow.checked ? '1' : '0'); } catch (e) { /* ignore */ }
     start();

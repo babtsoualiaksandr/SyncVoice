@@ -11,8 +11,8 @@
     <a class="call-back" href="{% url 'player:index' %}?day={{ audio.call_started_at|date:'Y-m-d' }}"
        title="Все звонки за {{ audio.call_started_at|date:'d.m.Y' }}">← {{ audio.call_started_at|date:"d.m.Y" }}</a>
     <span class="call-step">
-      {% if prev_call %}<a href="{{ prev_call.get_absolute_url }}" title="Предыдущий звонок (Alt+←)">‹</a>{% else %}<span>‹</span>{% endif %}
-      {% if next_call %}<a href="{{ next_call.get_absolute_url }}" title="Следующий звонок (Alt+→)">›</a>{% else %}<span>›</span>{% endif %}
+      {% if prev_call %}<a href="{{ prev_call.get_absolute_url }}" id="prev-call" data-survey-url="{{ prev_call.survey_url|default:'' }}" title="Предыдущий звонок (Alt+←)">‹</a>{% else %}<span>‹</span>{% endif %}
+      {% if next_call %}<a href="{{ next_call.get_absolute_url }}" id="next-call" data-survey-url="{{ next_call.survey_url|default:'' }}" title="Следующий звонок (Alt+→)">›</a>{% else %}<span>›</span>{% endif %}
     </span>
   {% endif %}
   <h1 class="call-title">
@@ -72,11 +72,11 @@
 <script src="{% static 'player/panes.js' %}"></script>
 <script src="{% static 'player/callbar.js' %}"></script>
 <script>
-  // Alt+←/→ — previous/next call of the day.
+  // Alt+←/→ — previous/next call of the day (same as clicking ‹ ›, so the survey window follows).
   document.addEventListener('keydown', (e) => {
     if (!e.altKey) return;
-    const url = { ArrowLeft: '{{ prev_call.get_absolute_url|default:"" }}', ArrowRight: '{{ next_call.get_absolute_url|default:"" }}' }[e.key];
-    if (url) { e.preventDefault(); window.location.href = url; }
+    const link = document.getElementById({ ArrowLeft: 'prev-call', ArrowRight: 'next-call' }[e.key]);
+    if (link) { e.preventDefault(); link.click(); }
   });
 </script>
 {% endblock %}
