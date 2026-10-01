@@ -6,8 +6,11 @@ embedded frame. The gateway forwards requests to the CRM with SyncVoice's
 own logged-in session instead, so the survey shows in the panel and the
 controller never logs in there.
 
-Only GET/HEAD pass: the gateway is for viewing; nothing can be changed in
-the CRM under SyncVoice's account. It listens on 127.0.0.1 only.
+It is for viewing: GET/HEAD pass, and POST only for the page's own
+background data requests (XMLHttpRequest) to addresses that don't look like
+changes (update/save/delete/...). Form submissions and anything that could
+change the CRM under SyncVoice's account are refused (and logged). It
+listens on 127.0.0.1 only.
 """
 import logging
 import re
@@ -29,6 +32,16 @@ HOP_BY_HOP = {
     'content-encoding', 'content-length', 'set-cookie', 'x-frame-options',
 }
 TEXT_TYPES = ('text/', 'application/javascript', 'application/json', 'application/xml')
+# POST paths that could change data in the CRM — never forwarded.
+WRITE_PATH = re.compile(r'update|save|delete|remove|edit|create|add|store|insert|set|change|upload|import',
+                        re.IGNORECASE)
+
+
+def allowed(method: str, path: str, ajax: bool) -> bool:
+    """Viewing only: GET/HEAD, plus background data loads (XHR POST to a non-write address)."""
+    if method in ('GET', 'HEAD'):
+        return True
+    return method == 'POST' and ajax and not WRITE_PATH.search(urlsplit(path).path)
 
 
 def proxy_origin() -> str:
@@ -46,13 +59,24 @@ def _without_frame_ancestors(csp: str) -> str:
     return ';'.join(kept).strip()
 
 
-def proxy_response(client, method: str, path: str) -> tuple[int, list, bytes]:
+def proxy_response(client, method: str, path: str, body: bytes = b'',
+                   request_headers: dict | None = None) -> tuple[int, list, bytes]:
     """(status, headers, body) for one request to the gateway."""
-    if method not in ('GET', 'HEAD'):
+    request_headers = request_headers or {}
+    ajax = request_headers.get('X-Requested-With', '').lower() == 'xmlhttprequest'
+    if not allowed(method, path, ajax):
+        logger.warning('CRM gateway refused %s %s (viewing only)', method, path)
         return _page(405, 'Только просмотр',
                      'Через SyncVoice анкету можно только смотреть. Чтобы изменить её, откройте «Окно рядом».')
+    forward = {}
+    if method == 'POST':
+        forward = {'data': body, 'headers': {
+            'Content-Type': request_headers.get('Content-Type', 'application/x-www-form-urlencoded'),
+            'X-Requested-With': 'XMLHttpRequest',
+            'Referer': client.url('admin/Reports'),
+        }}
     try:
-        response = client.request(method, path, allow_redirects=False)
+        response = client.request(method, path, allow_redirects=False, **forward)
     except CrmError as exc:
         return _page(502, 'CRM недоступна', str(exc))
 
@@ -88,9 +112,14 @@ class _Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
     def _handle(self):
+        # Always read the request body, even of a refused request: left unread,
+        # it is taken as the start of the next request on this connection.
+        length = int(self.headers.get('Content-Length') or 0)
+        request_body = self.rfile.read(length) if length else b''
         close_old_connections()
         try:
-            status, headers, body = proxy_response(get_client(), self.command, self.path)
+            status, headers, body = proxy_response(
+                get_client(), self.command, self.path, request_body, dict(self.headers.items()))
         except CrmError as exc:  # not configured
             status, headers, body = _page(503, 'CRM не настроена', f'{exc}')
         except Exception:
@@ -102,6 +131,9 @@ class _Handler(BaseHTTPRequestHandler):
         for name, value in headers:
             self.send_header(name, value)
         self.send_header('Content-Length', str(len(body)))
+        if status == 405:
+            self.send_header('Connection', 'close')
+            self.close_connection = True
         self.end_headers()
         if self.command != 'HEAD':
             self.wfile.write(body)

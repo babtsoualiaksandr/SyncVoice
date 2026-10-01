@@ -1,11 +1,14 @@
 import io
+import http.client
 import shutil
 import sys
 import tempfile
+import threading
 import wave
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from http.server import ThreadingHTTPServer
 from unittest import mock
 
 import httpx
@@ -1244,10 +1247,44 @@ class CrmGatewayTests(TestCase):
         self.client_ = mock.Mock(base_url='http://192.168.12.230/')
 
     def test_only_viewing(self):
-        status, _, body = crm_proxy.proxy_response(self.client_, 'POST', '/admin/Reports/update200')
-        self.assertEqual(status, 405)
-        self.assertIn('Только просмотр', body.decode())
+        # A form submission (no XHR header) and an XHR to a write-like address are refused.
+        for path, headers in [('/admin/Reports/update200', {}),
+                              ('/admin/Reports/update200', {'X-Requested-With': 'XMLHttpRequest'}),
+                              ('/admin/Reports/saveAnswers', {'X-Requested-With': 'XMLHttpRequest'})]:
+            status, _, body = crm_proxy.proxy_response(self.client_, 'POST', path, b'a=1', headers)
+            self.assertEqual(status, 405, path)
+            self.assertIn('Только просмотр', body.decode())
         self.client_.request.assert_not_called()
+
+    def test_background_data_load_is_forwarded(self):
+        self.client_.url.side_effect = lambda path: 'http://192.168.12.230/' + path
+        self.client_.request.return_value = crm_reply('{"answers": []}', headers={'Content-Type': 'application/json'})
+        status, _, body = crm_proxy.proxy_response(
+            self.client_, 'POST', '/admin/Reports/answers', b'MembersSurveyID=235692',
+            {'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'})
+        self.assertEqual((status, body), (200, b'{"answers": []}'))
+        kwargs = self.client_.request.call_args.kwargs
+        self.assertEqual(kwargs['data'], b'MembersSurveyID=235692')
+        self.assertEqual(kwargs['headers']['X-Requested-With'], 'XMLHttpRequest')
+
+    def test_refused_body_does_not_break_the_next_request(self):
+        # The 501 «Unsupported method ('MembersSurveyID=…GET')» seen in the field.
+        fake = mock.Mock(base_url='http://192.168.12.230/')
+        fake.request.return_value = crm_reply('<h1>Анкета</h1>', headers={'Content-Type': 'text/html'})
+        server = ThreadingHTTPServer(('127.0.0.1', 0), crm_proxy._Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        with mock.patch('player.crm_proxy.get_client', return_value=fake):
+            conn = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=5)
+            conn.request('POST', '/admin/Reports/update200', body='MembersSurveyID=235692',
+                         headers={'Content-Type': 'application/x-www-form-urlencoded'})
+            first = conn.getresponse()
+            first.read()
+            self.assertEqual(first.status, 405)
+            conn = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=5)
+            conn.request('GET', '/admin/Reports/update200')
+            second = conn.getresponse()
+            self.assertEqual((second.status, second.read()), (200, '<h1>Анкета</h1>'.encode()))
 
     @override_settings(CRM_PROXY_PORT=8766)
     def test_rewrites_links_and_allows_framing(self):
