@@ -3,6 +3,7 @@ import logging
 import tempfile
 from pathlib import Path
 
+from django.conf import settings as django_settings
 from django.core.files import File
 from django.utils import timezone
 
@@ -12,6 +13,11 @@ from .models import AppSettings, AudioFile, Interviewer, PbxSync, parse_call_nam
 from .pbx import FreePbxClient, PbxError
 
 logger = logging.getLogger(__name__)
+
+
+def debug_dir() -> Path:
+    """Where non-WAV replies of the PBX are kept for diagnosis."""
+    return Path(django_settings.MEDIA_ROOT) / 'pbx_debug'
 
 
 def make_client(settings: AppSettings | None = None) -> FreePbxClient:
@@ -46,6 +52,7 @@ def run_sync(sync: PbxSync, client: FreePbxClient | None = None) -> None:
         sync.found = len(wanted)
         sync.save(update_fields=['found'])
 
+        failures = []
         with tempfile.TemporaryDirectory() as tmp_dir:
             for rec, info in wanted:
                 call_id = info['call_id'] if info else rec.uniqueid
@@ -54,7 +61,14 @@ def run_sync(sync: PbxSync, client: FreePbxClient | None = None) -> None:
                     sync.save(update_fields=['skipped'])
                     continue
                 tmp_path = Path(tmp_dir) / rec.filename
-                client.download(rec, tmp_path)
+                try:
+                    client.download(rec, tmp_path, debug_dir=debug_dir())
+                except PbxError as exc:  # one bad recording must not stop the day
+                    logger.warning('Download of %s failed: %s', rec.filename, exc)
+                    failures.append(str(exc))
+                    sync.failed += 1
+                    sync.save(update_fields=['failed'])
+                    continue
                 audio = AudioFile(sync=sync, call_id='' if info else rec.uniqueid)
                 with tmp_path.open('rb') as f:
                     audio.file.save(rec.filename, File(f), save=False)
@@ -69,7 +83,14 @@ def run_sync(sync: PbxSync, client: FreePbxClient | None = None) -> None:
         logger.exception('PBX sync %s failed', sync.pk)
         _finish(sync, PbxSync.Status.ERROR, f'Непредвиденная ошибка: {exc}')
     else:
-        _finish(sync, PbxSync.Status.DONE)
+        if failures:
+            note = f'Не скачано {len(failures)} из {sync.found}. Первая причина: {failures[0]}'
+            if debug_dir().exists():
+                note += f' Ответы АТС сохранены в {debug_dir()}'
+            status = PbxSync.Status.DONE if sync.downloaded or sync.skipped else PbxSync.Status.ERROR
+            _finish(sync, status, note)
+        else:
+            _finish(sync, PbxSync.Status.DONE)
 
 
 def _finish(sync: PbxSync, status: str, error: str = '') -> None:

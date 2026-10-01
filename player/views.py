@@ -140,6 +140,7 @@ def status(request):
             'found': sync.found,
             'downloaded': sync.downloaded,
             'skipped': sync.skipped,
+            'failed': sync.failed,
             'error': sync.error,
         },
         'queue': AudioFile.objects.filter(

@@ -106,6 +106,7 @@ class PbxSync(models.Model):
     found = models.PositiveIntegerField('найдено', default=0)
     downloaded = models.PositiveIntegerField('скачано', default=0)
     skipped = models.PositiveIntegerField('уже были', default=0)
+    failed = models.PositiveIntegerField('не скачано', default=0)
     error = models.TextField('ошибка', blank=True)
     created_at = models.DateTimeField('создано', auto_now_add=True)
     finished_at = models.DateTimeField('завершено', null=True, blank=True)

@@ -13,6 +13,9 @@
     if (s) {
       if (s.status === 'error') {
         parts.push(`Загрузка за ${s.day}: ошибка — ${s.error}`);
+      } else if (s.status === 'done' && s.failed) {
+        parts.push(`${s.day}: скачано ${s.downloaded} из ${s.found}, не скачано ${s.failed}`
+                   + (s.skipped ? `, уже были ${s.skipped}` : '') + ` — ${s.error}`);
       } else if (s.status === 'pending') {
         parts.push(`Загрузка за ${s.day}: в очереди…`);
       } else {
@@ -33,7 +36,7 @@
       warning.hidden = data.worker_alive;
       const text = describe(data);
       if (text) statusEl.textContent = text;
-      statusEl.classList.toggle('flash-error', data.sync?.status === 'error');
+      statusEl.classList.toggle('flash-error', data.sync?.status === 'error' || !!data.sync?.failed);
 
       // Reload the call list once a running sync finishes with new calls.
       const key = data.sync ? data.sync.status : '';

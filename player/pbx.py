@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 import requests
 import urllib3
 
-from .audio_utils import is_wav
+from .audio_utils import extract_wav
 
 logger = logging.getLogger(__name__)
 
@@ -131,24 +131,48 @@ class FreePbxClient:
             response = self._request('POST', CDR_PATH, data=form, headers=headers)
         return parse_cdr_html(response.text)
 
-    def download(self, recording: Recording, dest: Path) -> None:
-        """Download `recording` to `dest`. Raises PbxError if no URL returns a WAV."""
+    def download(self, recording: Recording, dest: Path, debug_dir: Path | None = None) -> None:
+        """Download `recording` to `dest`. Raises PbxError if no URL returns a WAV.
+
+        If the PBX answers with something else, the reply is described in the
+        error and, with `debug_dir`, saved there for inspection.
+        """
         self._ensure_login()
-        for path in DOWNLOAD_PATHS:
-            path = path.format(uniqueid=recording.uniqueid)
+        problems = []
+        for template in DOWNLOAD_PATHS:
+            path = template.format(uniqueid=quote(recording.uniqueid, safe='.'))
             try:
-                response = self._request('GET', path, stream=True)
+                response = self._request('GET', path, stream=True, headers=self._form_headers())
             except PbxError as exc:
-                logger.info('Download via %s failed: %s', path, exc)
+                problems.append(str(exc))
                 continue
             with tempfile.NamedTemporaryFile(dir=dest.parent, delete=False, suffix='.part') as tmp:
-                shutil.copyfileobj(response.raw, tmp)
+                for chunk in response.iter_content(64 * 1024):  # unpacks gzip/deflate, unlike .raw
+                    tmp.write(chunk)
             tmp_path = Path(tmp.name)
-            if is_wav(tmp_path):
+            if extract_wav(tmp_path):
                 tmp_path.replace(dest)
                 return
+            problems.append(_describe_reply(path, response, tmp_path))
+            if debug_dir:
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                kind = 'ajax' if 'ajax.php' in path else 'download_audio'
+                shutil.copyfile(tmp_path, debug_dir / f'{recording.uniqueid}-{kind}.html')
             tmp_path.unlink()
-        raise PbxError(f'Не удалось скачать запись {recording.filename}')
+        raise PbxError(f'Не удалось скачать запись {recording.filename} — ' + '; '.join(problems))
+
+
+def _describe_reply(path: str, response: requests.Response, body_path: Path) -> str:
+    """Short description of a non-WAV reply, for the user and for debugging."""
+    with open(body_path, 'rb') as f:
+        head = f.read(300)
+    size = body_path.stat().st_size
+    text = re.sub(r'\s+', ' ', head.decode('utf-8', 'replace')).strip()
+    kind = 'страница входа (сессия не принята)' if 'loginform' in text or 'name="password"' in text else \
+        'пустой ответ' if not size else f'начало: «{text[:120]}»'
+    label = 'ajax.php' if 'ajax.php' in path else 'download_audio'
+    content_type = response.headers.get('Content-Type', '?')
+    return f'{label}: HTTP {response.status_code}, {content_type}, {size} байт, {kind}'
 
 
 @dataclass

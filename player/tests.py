@@ -448,7 +448,9 @@ class FakePbx:
         self.limits = (min_duration, max_duration)
         return self.recordings
 
-    def download(self, rec, dest):
+    def download(self, rec, dest, debug_dir=None):
+        if rec.filename in getattr(self, 'broken', ()):
+            raise PbxError(f'Не удалось скачать запись {rec.filename} — download_audio: HTTP 200, text/html')
         self.downloaded.append(rec.filename)
         Path(dest).write_bytes(self.body)
 
@@ -484,6 +486,25 @@ class SyncTests(TestCase):
         self.assertEqual(new.status, AudioFile.Status.PENDING)
         self.assertEqual(new.sync, sync)
         self.assertAlmostEqual(new.duration, 1.0)
+
+    def test_failed_download_does_not_stop_the_day(self):
+        fake = FakePbx([rec(CALL_A, uniqueid='a'), rec(CALL_B, uniqueid='b')])
+        fake.broken = {CALL_A}
+        sync = PbxSync.objects.create(day=date(2026, 9, 25))
+        run_sync(sync, client=fake)
+        sync.refresh_from_db()
+        self.assertEqual((sync.status, sync.found, sync.downloaded, sync.failed), ('done', 2, 1, 1))
+        self.assertIn('Не скачано 1 из 2', sync.error)
+        self.assertIn('text/html', sync.error)
+        self.assertEqual(fake.downloaded, [CALL_B])
+
+    def test_all_downloads_failed_is_an_error(self):
+        fake = FakePbx([rec(CALL_A, uniqueid='a')])
+        fake.broken = {CALL_A}
+        sync = PbxSync.objects.create(day=date(2026, 9, 25))
+        run_sync(sync, client=fake)
+        sync.refresh_from_db()
+        self.assertEqual((sync.status, sync.failed), ('error', 1))
 
     def test_pbx_error_is_reported(self):
         class Broken(FakePbx):
@@ -533,6 +554,14 @@ CDR_PAGE = (
               talk='00:00', shown='00:00', recorded=False)
     + '</table></body></html>'
 )
+
+
+def reply(body: bytes, content_type='audio/x-wav', status=200):
+    """A streamed requests response; iter_content yields the (already decoded) body."""
+    response = mock.Mock(status_code=status, headers={'Content-Type': content_type})
+    response.iter_content.side_effect = lambda size: [body[i:i + size] for i in range(0, len(body), size)] or [b'']
+    response.raw = io.BytesIO(b'\x1f\x8b compressed bytes')  # what .raw would give for gzip
+    return response
 
 
 class PbxClientTests(TestCase):
@@ -595,10 +624,44 @@ class PbxClientTests(TestCase):
                 self.assertRaisesRegex(PbxError, 'неверный логин или пароль'):
             client.login()
 
+    def test_download_reads_decoded_body(self):
+        client = FreePbxClient('http://192.168.3.80', 'admin', 'secret')
+        client._logged_in = True
+        with mock.patch.object(client.session, 'request', return_value=reply(make_wav())), \
+                tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / CALL_A
+            client.download(rec(CALL_A), dest)
+            self.assertTrue(dest.read_bytes().startswith(b'RIFF'))  # not the gzip bytes of .raw
+
+    def test_download_cuts_html_before_wav(self):
+        client = FreePbxClient('http://192.168.3.80', 'admin', 'secret')
+        client._logged_in = True
+        body = b'<!DOCTYPE html><html>FreePBX header</html>\n' + make_wav()
+        with mock.patch.object(client.session, 'request', return_value=reply(body, 'text/html')), \
+                tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / CALL_A
+            client.download(rec(CALL_A), dest)
+            self.assertEqual(dest.read_bytes(), make_wav())
+
+    def test_non_wav_reply_is_described_and_saved(self):
+        client = FreePbxClient('http://192.168.3.80', 'admin', 'secret')
+        client._logged_in = True
+        page = reply('<html><body>Файл записи не найден</body></html>'.encode(), 'text/html; charset=UTF-8')
+        with mock.patch.object(client.session, 'request', return_value=page), \
+                tempfile.TemporaryDirectory() as tmp:
+            debug = Path(tmp) / 'debug'
+            with self.assertRaises(PbxError) as ctx:
+                client.download(rec(CALL_A, uniqueid='1790679660.25374'), Path(tmp) / CALL_A, debug_dir=debug)
+            message = str(ctx.exception)
+            self.assertIn('download_audio: HTTP 200, text/html; charset=UTF-8', message)
+            self.assertIn('Файл записи не найден', message)
+            self.assertEqual(sorted(p.name for p in debug.iterdir()),
+                             ['1790679660.25374-ajax.html', '1790679660.25374-download_audio.html'])
+
     def test_download_uses_confirmed_link_first(self):
         client = FreePbxClient('http://192.168.3.80', 'admin', 'secret')
         client._logged_in = True
-        ok = mock.Mock(status_code=200, raw=io.BytesIO(make_wav()))
+        ok = reply(make_wav())
         with mock.patch.object(client.session, 'request', return_value=ok) as request, \
                 tempfile.TemporaryDirectory() as tmp:
             client.download(rec(CALL_A, uniqueid='1790679660.25374'), Path(tmp) / CALL_A)
@@ -610,7 +673,7 @@ class PbxClientTests(TestCase):
     def test_download_rejects_login_page(self):
         client = FreePbxClient('https://pbx.local', 'admin', 'secret')
         client._logged_in = True
-        html = mock.Mock(status_code=200, raw=io.BytesIO(b'<html>login</html>'))
+        html = reply(b'<html>login</html>', 'text/html; charset=UTF-8')
         with mock.patch.object(client.session, 'request', return_value=html), \
                 tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(PbxError):
@@ -620,7 +683,7 @@ class PbxClientTests(TestCase):
     def test_download_saves_wav(self):
         client = FreePbxClient('https://pbx.local', 'admin', 'secret')
         client._logged_in = True
-        ok = mock.Mock(status_code=200, raw=io.BytesIO(make_wav()))
+        ok = reply(make_wav())
         with mock.patch.object(client.session, 'request', return_value=ok), \
                 tempfile.TemporaryDirectory() as tmp:
             dest = Path(tmp) / CALL_A
