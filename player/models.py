@@ -40,7 +40,7 @@ class AppSettings(models.Model):
     (Windows Credential Manager / macOS Keychain), see player/credentials.py.
     """
 
-    pbx_url = models.URLField('адрес АТС', blank=True, help_text='Например, https://192.168.1.10')
+    pbx_url = models.URLField('адрес АТС', blank=True, help_text='Например, http://192.168.3.80')
     pbx_username = models.CharField('логин АТС', max_length=150, blank=True)
     pbx_verify_ssl = models.BooleanField(
         'проверять SSL-сертификат АТС', default=False,
@@ -48,8 +48,12 @@ class AppSettings(models.Model):
     )
     controller = models.CharField('инициалы контролёра', max_length=16, blank=True, help_text='Например, ИБ')
     min_duration = models.PositiveIntegerField(
-        'мин. длительность звонка, с', default=30,
-        help_text='Более короткие звонки (недозвоны, сбросы) не скачиваются.',
+        'мин. длительность звонка, с', default=80,
+        help_text='Короче не скачиваются (недозвоны, сбросы). Как «Длительность: между» в «Отчётах CDR».',
+    )
+    max_duration = models.PositiveIntegerField(
+        'макс. длительность звонка, с', default=900,
+        help_text='Длиннее не скачиваются. 0 — без ограничения.',
     )
     worker_seen_at = models.DateTimeField(null=True, blank=True, editable=False)
 

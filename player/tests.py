@@ -23,7 +23,8 @@ from .analysis import SuggestedFields
 from . import forms as forms_module
 from .forms import SettingsForm
 from .models import AppSettings, AudioFile, CallAnalysis, CallReview, RadioStation, Interviewer, PbxSync, Segment, parse_call_name
-from .pbx import FreePbxClient, PbxError, Recording, parse_cdr_csv
+from . import pbx
+from .pbx import FreePbxClient, PbxError, Recording, parse_cdr_html
 from .sync import run_sync
 
 MEDIA_ROOT = tempfile.mkdtemp()
@@ -443,7 +444,8 @@ class FakePbx:
         self.body = body or make_wav()
         self.downloaded = []
 
-    def list_recordings(self, day):
+    def list_recordings(self, day, min_duration=0, max_duration=0):
+        self.limits = (min_duration, max_duration)
         return self.recordings
 
     def download(self, rec, dest):
@@ -477,6 +479,7 @@ class SyncTests(TestCase):
         self.assertEqual(sync.status, PbxSync.Status.DONE)
         self.assertEqual((sync.found, sync.downloaded, sync.skipped), (2, 1, 1))
         self.assertEqual(fake.downloaded, [CALL_B])
+        self.assertEqual(fake.limits, (30, 900))  # sent to the PBX search
         new = AudioFile.objects.get(call_id='1790000002.101')
         self.assertEqual(new.status, AudioFile.Status.PENDING)
         self.assertEqual(new.sync, sync)
@@ -484,7 +487,7 @@ class SyncTests(TestCase):
 
     def test_pbx_error_is_reported(self):
         class Broken(FakePbx):
-            def list_recordings(self, day):
+            def list_recordings(self, day, min_duration=0, max_duration=0):
                 raise PbxError('Не удалось войти в АТС: неверный логин или пароль.')
 
         sync = PbxSync.objects.create(day=date(2026, 9, 25))
@@ -494,23 +497,115 @@ class SyncTests(TestCase):
         self.assertIn('неверный логин', sync.error)
 
 
-class PbxClientTests(TestCase):
-    CSV = (
-        'calldate,clid,src,dst,dcontext,billsec,disposition,uniqueid,recordingfile\n'
-        f'2026-09-25 09:32:15,"Марина" <308>,308,375290000103,from-internal,122,ANSWERED,1790000001.100,{CALL_A}\n'
-        '2026-09-25 09:40:00,"Марина" <308>,308,375290000000,from-internal,0,NO ANSWER,1790000005.105,\n'
+# Structure of the real «Отчёты CDR» result page (FreePBX at the call centre),
+# with made-up phone numbers. Playback rows are never closed, as on the PBX.
+def cdr_row(time, phone, ext, uniqueid, talk='01:46', shown='01:47', status='ANSWERED', recorded=True):
+    filename = f'out-{phone}-{ext}-{time[:10].replace("-", "")}-{time[11:].replace(":", "")}-{uniqueid}.wav'
+    recording = (
+        f'''<td title="{filename}"><a href="#" onClick="javascript:cdr_play(131,'{uniqueid}'); return false;">'''
+        f'''<img src="assets/cdr/images/cdr_sound.png" alt="Call recording" /></a>\n    '''
+        f'''<a href="/admin/config.php?display=cdr&action=download_audio&cdr_file={uniqueid}">'''
+        f'''<img src="assets/cdr/images/cdr_download.png" alt="Call recording" /></a></td>'''
+        if recorded else '<td></td>'
+    )
+    return (
+        f'''<tr id="playback-{uniqueid}" class="playback" style="display:none;"><td colspan="14">'''
+        f'''<div id="jquery_jplayer_1" class="jp-jplayer"></div><div class="jp-no-solution">'''
+        f'''<span>Update Required</span></div>  <tr class="record">\n'''
+        f'''<td>{time}</td>{recording}'''
+        f'''<td title="Идентификатор: {uniqueid}"><a href="/admin/config.php?display=cdr&action=cel_show&uid={uniqueid}" >{uniqueid}</a></td>'''
+        f'''<td title="Канал: SIP/{ext}-0000631e">&quot;{ext}&quot; &lt;{ext}&gt;</td>'''
+        f'''<td title="Канал: SIP/10017-0000631f">&lt;{ext}&gt;</td><td title="Входящий номер: "></td>'''
+        f'''<td title="Приложение: Dial(SIP/10017/80{phone[3:]},300,TM(outdial))">Dial</td>'''
+        f'''<td title="Канал: SIP/10017-0000631f Контекст: from-internal">{phone}</td>'''
+        f'''<td title="AMA-флаг: DEFAULT">{status}</td><td title="Время разговора: {talk}">{shown}</td>'''
+        f'''<td></td><td></td>    <td></td>\n    <td></td>\n  </tr>\n'''
     )
 
-    def test_parse_cdr_csv(self):
-        recs = parse_cdr_csv(self.CSV)
-        self.assertEqual(len(recs), 1)  # the call without a recording is dropped
-        self.assertEqual(recs[0].filename, CALL_A)
-        self.assertEqual(recs[0].billsec, 122)
-        self.assertEqual(recs[0].calldate, datetime(2026, 9, 25, 9, 32, 15))
 
-    def test_parse_rejects_html(self):
+CDR_PAGE = (
+    '<html><body><form method="post" action="config.php?display=cdr">'
+    '<input name="startday" value="29"><input name="endday" value="29"></form>'
+    '<table class="cdr">'
+    + cdr_row('2026-09-29 14:01:00', '375290000201', '301', '1790679660.25374')
+    + cdr_row('2026-09-29 14:10:05', '375290000202', '305', '1790680205.25380', talk='12:03', shown='12:04')
+    + cdr_row('2026-09-29 14:20:00', '375290000203', '301', '1790680800.25390', status='NO ANSWER',
+              talk='00:00', shown='00:00', recorded=False)
+    + '</table></body></html>'
+)
+
+
+class PbxClientTests(TestCase):
+    def test_parse_cdr_html(self):
+        recs = parse_cdr_html(CDR_PAGE)
+        self.assertEqual(len(recs), 2)  # the call without a recording is dropped
+        first = recs[0]
+        self.assertEqual(first.filename, 'out-375290000201-301-20260929-140100-1790679660.25374.wav')
+        self.assertEqual(first.uniqueid, '1790679660.25374')
+        self.assertEqual(first.calldate, datetime(2026, 9, 29, 14, 1, 0))
+        self.assertEqual((first.src, first.dst, first.disposition), ('301', '375290000201', 'ANSWERED'))
+        self.assertEqual(first.billsec, 106)  # «Время разговора: 01:46», not the shown 01:47
+        self.assertEqual(recs[1].billsec, 723)
+        info = parse_call_name(first.filename)
+        self.assertEqual((info['call_id'], info['operator']), ('1790679660.25374', '301'))
+
+    def test_empty_result(self):
+        self.assertEqual(parse_cdr_html('<form><input name="startday"></form><table></table>'), [])
+
+    def test_unexpected_page(self):
         with self.assertRaises(PbxError):
-            parse_cdr_csv('<html><form id="loginform"></form></html>')
+            parse_cdr_html('<html><body>Доступ запрещён</body></html>')
+
+    def test_seconds(self):
+        self.assertEqual([pbx._seconds(t) for t in ('Время разговора: 01:46', '1:02:03', '')], [106, 3723, 0])
+
+    def test_search_form_as_browser_sends_it(self):
+        client = FreePbxClient('http://192.168.3.80', 'admin', 'secret')
+        client._logged_in = True
+        page = mock.Mock(status_code=200, text=CDR_PAGE)
+        with mock.patch.object(client.session, 'request', return_value=page) as request:
+            recs = client.list_recordings(date(2026, 9, 29), 80, 900)
+        self.assertEqual(len(recs), 2)
+        method, url = request.call_args.args
+        form = request.call_args.kwargs['data']
+        self.assertEqual((method, url), ('POST', 'http://192.168.3.80/admin/config.php?display=cdr'))
+        self.assertEqual(
+            {k: form[k] for k in ('startday', 'startmonth', 'startyear', 'endday', 'endhour', 'endmin',
+                                  'need_html', 'limit', 'dur_min', 'dur_max', 'disposition', 'group')},
+            {'startday': '29', 'startmonth': '09', 'startyear': '2026', 'endday': '29', 'endhour': '23',
+             'endmin': '59', 'need_html': 'true', 'limit': '1000', 'dur_min': '80', 'dur_max': '900',
+             'disposition': 'all', 'group': 'day'},
+        )
+        self.assertEqual((form['dst'], form['dst_mod']), ('', 'begins_with'))
+
+    def test_login_like_browser(self):
+        client = FreePbxClient('http://192.168.3.80/', 'operator', 'p@ss')
+        with mock.patch.object(client.session, 'request', return_value=mock.Mock(status_code=200, text=CDR_PAGE)) as request:
+            client.login()
+        self.assertEqual(request.call_args.args, ('POST', 'http://192.168.3.80/admin/config.php?display=cdr'))
+        self.assertEqual(request.call_args.kwargs['data'], {'username': 'operator', 'password': 'p@ss'})
+        self.assertEqual(request.call_args.kwargs['headers'], {
+            'Origin': 'http://192.168.3.80', 'Referer': 'http://192.168.3.80/admin/config.php?display=cdr',
+        })
+
+    def test_wrong_password(self):
+        client = FreePbxClient('http://192.168.3.80', 'operator', 'wrong')
+        login_page = mock.Mock(status_code=200, text='<form id="loginform"><input name="password"></form>')
+        with mock.patch.object(client.session, 'request', return_value=login_page), \
+                self.assertRaisesRegex(PbxError, 'неверный логин или пароль'):
+            client.login()
+
+    def test_download_uses_confirmed_link_first(self):
+        client = FreePbxClient('http://192.168.3.80', 'admin', 'secret')
+        client._logged_in = True
+        ok = mock.Mock(status_code=200, raw=io.BytesIO(make_wav()))
+        with mock.patch.object(client.session, 'request', return_value=ok) as request, \
+                tempfile.TemporaryDirectory() as tmp:
+            client.download(rec(CALL_A, uniqueid='1790679660.25374'), Path(tmp) / CALL_A)
+        self.assertEqual(
+            request.call_args_list[0].args[1],
+            'http://192.168.3.80/admin/config.php?display=cdr&action=download_audio&cdr_file=1790679660.25374',
+        )
 
     def test_download_rejects_login_page(self):
         client = FreePbxClient('https://pbx.local', 'admin', 'secret')
@@ -580,7 +675,7 @@ class SettingsFormTests(TestCase):
     def test_interviewers_parsed_and_replaced(self):
         Interviewer.objects.create(extension='301', name='Эдуард')
         form = SettingsForm({
-            'min_duration': 30,
+            'min_duration': 30, 'max_duration': 900,
             'interviewers': '301 Виолетта\n\n308 Марина\n308 Маргарита\n',
         }, instance=AppSettings.load())
         self.assertTrue(form.is_valid(), form.errors)
@@ -592,7 +687,7 @@ class SettingsFormTests(TestCase):
         )
 
     def test_bad_line(self):
-        form = SettingsForm({'min_duration': 30, 'interviewers': 'Марина'}, instance=AppSettings.load())
+        form = SettingsForm({'min_duration': 30, 'max_duration': 900, 'interviewers': 'Марина'}, instance=AppSettings.load())
         self.assertFalse(form.is_valid())
         self.assertIn('Строка 1', str(form.errors))
 

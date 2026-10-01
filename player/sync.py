@@ -29,7 +29,7 @@ def run_sync(sync: PbxSync, client: FreePbxClient | None = None) -> None:
     sync.save(update_fields=['status', 'error'])
     try:
         client = client or make_client(settings)
-        recordings = client.list_recordings(sync.day)
+        recordings = client.list_recordings(sync.day, settings.min_duration, settings.max_duration)
 
         extensions = set(Interviewer.objects.values_list('extension', flat=True))
         wanted = []
@@ -39,6 +39,8 @@ def run_sync(sync: PbxSync, client: FreePbxClient | None = None) -> None:
             if extensions and operator not in extensions:
                 continue
             if rec.billsec < settings.min_duration:
+                continue  # the PBX filters by duration too; this is a safety net
+            if settings.max_duration and rec.billsec > settings.max_duration:
                 continue
             wanted.append((rec, info))
         sync.found = len(wanted)

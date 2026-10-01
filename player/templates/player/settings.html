@@ -28,7 +28,7 @@
     <fieldset>
       <legend>Контроль</legend>
       {% for field in form %}
-        {% if field.name in 'controller min_duration interviewers' %}
+        {% if field.name in 'controller min_duration max_duration interviewers' %}
           {% include 'player/_field.html' %}
         {% endif %}
       {% endfor %}

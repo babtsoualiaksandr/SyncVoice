@@ -99,7 +99,7 @@ class SettingsForm(forms.ModelForm):
 
     class Meta:
         model = AppSettings
-        fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration']
+        fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration', 'max_duration']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
