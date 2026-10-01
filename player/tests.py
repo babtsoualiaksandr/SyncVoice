@@ -20,7 +20,7 @@ from django.utils import timezone
 
 from google.genai import errors as genai_errors
 
-from . import analysis, report, stations, worker
+from . import analysis, crm, crm_proxy, report, stations, worker
 from .analysis import SuggestedFields
 from . import forms as forms_module
 from .forms import SettingsForm
@@ -766,7 +766,7 @@ class SettingsPageTests(TestCase):
         keyring = FakeKeyring()
         r = self.post(keyring)
         self.assertEqual(keyring.store, {('SyncVoice PBX', 'operator'): 'secret'})
-        self.assertContains(r, 'Настройки сохранены. Пароль сохранён.')
+        self.assertContains(r, 'Настройки сохранены. Пароль АТС сохранён.')
         self.assertContains(r, 'Пароль для логина «operator» сохранён')
         self.assertNotContains(r, 'secret')  # never rendered back
 
@@ -1159,3 +1159,153 @@ class SurveyCheckTests(TestCase):
         self.check()
         _, get = self.check()
         get.assert_not_called()
+
+
+CRM_LOGIN_PAGE = """<html><body><form method="post" action="/login">
+<input type="email" name="email" value=""><input type="password" name="password">
+<input type="hidden" name="_csrf_token" value="tok123"><input type="checkbox" name="_remember_me">
+<button>Войти</button></form></body></html>"""
+CRM_FIND = [  # the shape of the CRM's /admin/Reports/find reply, made-up numbers
+    {'Id': 100, 'MembersSurveyID': '1', 'MemberID': '9', 'Phone': '375290000103', 'OPUserID': 17,
+     'OPTime': '25-09-2025 10:00:00'},
+    {'Id': 200, 'MembersSurveyID': '2', 'MemberID': '9', 'Phone': '375290000103', 'OPUserID': 7,
+     'OPTime': '25-09-2026 09:34:01'},
+    {'Id': 201, 'MembersSurveyID': '3', 'MemberID': '9', 'Phone': '375290000103', 'OPUserID': 8,
+     'OPTime': '25-09-2026 16:00:00'},
+]
+
+
+def crm_reply(text='', status=200, url='http://crm.local/', json_data=None, headers=None, redirect_to=None):
+    response = mock.Mock(status_code=status, text=text, url=url, headers=headers or {}, encoding='utf-8')
+    response.content = text.encode()
+    response.is_redirect = redirect_to is not None
+    if redirect_to:
+        response.headers = {'Location': redirect_to, **(headers or {})}
+    response.json.side_effect = (lambda: json_data) if json_data is not None else ValueError
+    return response
+
+
+class CrmClientTests(TestCase):
+    def client_with(self, *replies):
+        client = crm.CrmClient('http://crm.local', 'sv@example.com', 'secret')
+        patcher = mock.patch.object(client.session, 'request', side_effect=list(replies))
+        self.request = patcher.start()
+        self.addCleanup(patcher.stop)
+        return client
+
+    def test_login_submits_form_like_browser(self):
+        client = self.client_with(
+            crm_reply(CRM_LOGIN_PAGE, url='http://crm.local/login'),
+            crm_reply('<h1>Админка</h1>', url='http://crm.local/admin'),
+        )
+        client.login()
+        method, url = self.request.call_args.args
+        self.assertEqual((method, url), ('POST', 'http://crm.local/login'))
+        self.assertEqual(self.request.call_args.kwargs['data'],
+                         {'email': 'sv@example.com', 'password': 'secret', '_csrf_token': 'tok123'})
+
+    def test_wrong_password(self):
+        client = self.client_with(
+            crm_reply(CRM_LOGIN_PAGE, url='http://crm.local/login'),
+            crm_reply(CRM_LOGIN_PAGE, url='http://crm.local/login'),
+        )
+        with self.assertRaisesRegex(crm.CrmError, 'неверный логин или пароль'):
+            client.login()
+
+    def test_find_and_pick(self):
+        client = self.client_with(
+            crm_reply(CRM_LOGIN_PAGE, url='http://crm.local/login'),
+            crm_reply('ok', url='http://crm.local/admin'),
+            crm_reply('[]', url='http://crm.local/admin/Reports/find', json_data=CRM_FIND),
+        )
+        surveys = client.find('375290000103')
+        self.assertEqual([s.id for s in surveys], [100, 200, 201])
+        self.assertEqual(self.request.call_args.kwargs['data'], {'PhoneN': '375290000103'})
+        chosen = crm.pick_survey(surveys, datetime(2026, 9, 25, 9, 32, 15))
+        self.assertEqual(chosen.id, 200)  # same day, closest to the call
+        self.assertEqual(chosen.path, 'admin/Reports/update200')
+        self.assertIsNone(crm.pick_survey(surveys, datetime(2026, 9, 27, 9, 0)))
+
+    def test_expired_session_logs_in_again(self):
+        client = self.client_with(
+            crm_reply(CRM_LOGIN_PAGE, url='http://crm.local/login'),
+            crm_reply('ok', url='http://crm.local/admin'),
+            crm_reply('', status=302, redirect_to='/login'),  # session expired
+            crm_reply(CRM_LOGIN_PAGE, url='http://crm.local/login'),
+            crm_reply('ok', url='http://crm.local/admin'),
+            crm_reply('<h1>Анкета</h1>', url='http://crm.local/admin/Reports/update200'),
+        )
+        response = client.request('GET', 'admin/Reports/update200', allow_redirects=False)
+        self.assertIn('Анкета', response.text)
+
+
+class CrmGatewayTests(TestCase):
+    def setUp(self):
+        self.client_ = mock.Mock(base_url='http://192.168.12.230/')
+
+    def test_only_viewing(self):
+        status, _, body = crm_proxy.proxy_response(self.client_, 'POST', '/admin/Reports/update200')
+        self.assertEqual(status, 405)
+        self.assertIn('Только просмотр', body.decode())
+        self.client_.request.assert_not_called()
+
+    @override_settings(CRM_PROXY_PORT=8766)
+    def test_rewrites_links_and_allows_framing(self):
+        page = '<a href="http://192.168.12.230/admin/Reports">Назад</a><img src="//192.168.12.230/logo.png">'
+        self.client_.request.return_value = crm_reply(page, headers={
+            'Content-Type': 'text/html; charset=UTF-8', 'X-Frame-Options': 'DENY', 'Set-Cookie': 'PHPSESSID=x',
+            'Content-Security-Policy': "default-src 'self'; frame-ancestors 'none'",
+        })
+        status, headers, body = crm_proxy.proxy_response(self.client_, 'GET', '/admin/Reports/update200')
+        names = {name.lower(): value for name, value in headers}
+        self.assertEqual(status, 200)
+        self.assertNotIn('x-frame-options', names)
+        self.assertNotIn('set-cookie', names)  # SyncVoice's CRM session never reaches the browser
+        self.assertEqual(names['content-security-policy'], "default-src 'self'")
+        self.assertEqual(body.decode(), '<a href="http://127.0.0.1:8766/admin/Reports">Назад</a>'
+                                        '<img src="http://127.0.0.1:8766/logo.png">')
+
+    @override_settings(CRM_PROXY_PORT=8766)
+    def test_redirect_location_rewritten(self):
+        self.client_.request.return_value = crm_reply(
+            '', status=302, redirect_to='http://192.168.12.230/admin/Reports')
+        status, headers, _ = crm_proxy.proxy_response(self.client_, 'GET', '/admin')
+        self.assertEqual((status, dict(headers)['Location']), (302, 'http://127.0.0.1:8766/admin/Reports'))
+
+    def test_crm_unreachable(self):
+        self.client_.request.side_effect = crm.CrmError('CRM недоступна: timeout')
+        status, _, body = crm_proxy.proxy_response(self.client_, 'GET', '/admin')
+        self.assertEqual(status, 502)
+        self.assertIn('timeout', body.decode())
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, CRM_PROXY_PORT=8766)
+class CrmCallPageTests(TestCase):
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'crm_url': 'http://crm.local', 'crm_username': 'sv'})
+        self.audio = make_call(CALL_A)  # 375290000103, 2026-09-25 09:32:15
+        fake = mock.Mock(base_url='http://crm.local/')
+        fake.find.return_value = [crm.parse_survey(row) for row in CRM_FIND]
+        fake.url.side_effect = lambda path: 'http://crm.local/' + path
+        patcher = mock.patch('player.crm.get_client', return_value=fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_lookup_marks_this_calls_survey(self):
+        data = self.client.get(reverse('player:crm_lookup', args=[self.audio.pk])).json()
+        self.assertTrue(data['ok'])
+        self.assertEqual(data['selected'], 200)
+        self.assertEqual([s['id'] for s in data['surveys']], [201, 200, 100])  # newest first
+        chosen = next(s for s in data['surveys'] if s['id'] == 200)
+        self.assertEqual(chosen['view_url'], 'http://127.0.0.1:8766/admin/Reports/update200')
+        self.assertEqual(chosen['direct_url'], 'http://crm.local/admin/Reports/update200')
+        self.assertEqual(chosen['time'], '25.09.2026 09:34:01')
+
+    def test_open_redirects_to_the_crm(self):
+        r = self.client.get(reverse('player:crm_open', args=[self.audio.pk]))
+        self.assertRedirects(r, 'http://crm.local/admin/Reports/update200', fetch_redirect_response=False)
+
+    def test_call_page_in_crm_mode(self):
+        r = self.client.get(self.audio.get_absolute_url())
+        self.assertContains(r, f'data-lookup-url="{reverse("player:crm_lookup", args=[self.audio.pk])}"')
+        self.assertContains(r, f'data-url="{reverse("player:crm_open", args=[self.audio.pk])}"')

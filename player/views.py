@@ -1,11 +1,13 @@
 import mimetypes
 import re
+import socket
 import warnings
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 import requests
 import urllib3
+from django.conf import settings as django_settings
 from django.contrib import messages
 from django.core.cache import cache
 from django.db.models import Count, Q
@@ -19,9 +21,9 @@ from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_GET, require_POST
 
 from .audio_utils import wav_duration
-from .credentials import get_password, set_password, store_name
+from .credentials import CRM_SERVICE, SERVICE as PBX_SERVICE, get_password, set_password, store_name
 from .forms import AudioUploadForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
-from . import analysis
+from . import analysis, crm
 from . import stations as station_directory
 from .models import CITIES as STATION_CITIES, AppSettings, AudioFile, CallAnalysis, CallReview, Interviewer, PbxSync, RadioStation, parse_call_name
 from .pbx import PbxError
@@ -154,33 +156,43 @@ def status(request):
     })
 
 
+def _keep_password(form, old_username, user_field, password_field, service):
+    """Save the entered password (or move the stored one to a renamed login). Errors go on the form."""
+    username = form.cleaned_data[user_field]
+    password = form.cleaned_data[password_field]
+    if not password and username and username != old_username:
+        password = get_password(old_username, service) or ''  # login renamed: keep the saved password
+    try:
+        if password and username:
+            set_password(username, password, service)
+    except Exception as exc:  # keyring backends raise various errors
+        form.add_error(password_field, f'Не удалось сохранить пароль в {store_name()}: {exc}')
+
+
 def settings_view(request):
     settings = AppSettings.load()
-    old_username = settings.pbx_username
+    old_pbx_user, old_crm_user = settings.pbx_username, settings.crm_username
     form = SettingsForm(request.POST or None, instance=settings)
     if request.method == 'POST' and form.is_valid():
-        username = form.cleaned_data['pbx_username']
-        password = form.cleaned_data['pbx_password']
-        if not password and username and username != old_username:
-            password = get_password(old_username) or ''  # login renamed: keep the saved password
-        try:
-            if password and username:
-                set_password(username, password)
-        except Exception as exc:  # keyring backends raise various errors
-            form.add_error('pbx_password', f'Не удалось сохранить пароль в {store_name()}: {exc}')
-        else:
+        _keep_password(form, old_pbx_user, 'pbx_username', 'pbx_password', PBX_SERVICE)
+        _keep_password(form, old_crm_user, 'crm_username', 'crm_password', CRM_SERVICE)
+        if not form.errors:
             form.save()
             form.save_interviewers()
-            note = ' Пароль сохранён.' if form.cleaned_data['pbx_password'] else ''
+            saved = [name for field, name in (('pbx_password', 'АТС'), ('crm_password', 'CRM'))
+                     if form.cleaned_data[field]]
+            note = f' Пароль {" и ".join(saved)} сохранён.' if saved else ''
             messages.success(request, 'Настройки сохранены.' + note)
             return redirect('player:settings')
     if form.errors:
         messages.error(request, 'Настройки не сохранены — исправьте отмеченные поля.')
-    username = form.instance.pbx_username if form.is_bound else settings.pbx_username
+    current = form.instance if form.is_bound else settings
     return render(request, 'player/settings.html', {
         'form': form,
-        'password_saved': bool(get_password(username)),
-        'password_username': username,
+        'password_saved': bool(get_password(current.pbx_username)),
+        'password_username': current.pbx_username,
+        'crm_password_saved': bool(get_password(current.crm_username, CRM_SERVICE)),
+        'crm_username': current.crm_username,
         'password_store': store_name(),
         'survey_example_call': (example := AudioFile.objects.exclude(phone='').first()),
         'survey_example': example.survey_url() if example else None,
@@ -227,6 +239,16 @@ def test_connection(request):
     except PbxError as exc:
         return JsonResponse({'ok': False, 'message': str(exc)})
     return JsonResponse({'ok': True, 'message': 'Подключение к АТС работает.'})
+
+
+@require_POST
+def test_crm(request):
+    try:
+        client = crm.get_client()
+        client.login()
+    except crm.CrmError as exc:
+        return JsonResponse({'ok': False, 'message': str(exc)})
+    return JsonResponse({'ok': True, 'message': 'Вход в CRM работает.'})
 
 
 def _day_neighbours(audio):
@@ -289,6 +311,7 @@ def detail(request, pk):
         'stations': [s for s in dict.fromkeys([*STATIONS, *station_directory.answer_names(), *used_stations]) if s],
         'ai_enabled': analysis.enabled(),
         'survey_url': audio.survey_url(),
+        'crm_lookup_url': reverse('player:crm_lookup', args=[audio.pk]) if crm.configured() and audio.phone else '',
         'ai': _analysis_json(_analysis_of(audio)),
         'prev_call': prev_call,
         'next_call': next_call,
@@ -488,3 +511,56 @@ def survey_check(request):
         cache.set(key, result, 600)
     embeddable, reason = result
     return JsonResponse({'ok': True, 'embeddable': embeddable, 'reason': reason})
+
+
+def _gateway_running() -> bool:
+    try:
+        with socket.create_connection(('127.0.0.1', django_settings.CRM_PROXY_PORT), timeout=0.3):
+            return True
+    except OSError:
+        return False
+
+
+@require_GET
+def crm_lookup(request, pk):
+    """The CRM surveys of this call's phone, the one entered for this call marked."""
+    audio = get_object_or_404(AudioFile, pk=pk)
+    if not crm.configured():
+        return JsonResponse({'ok': False, 'message': 'CRM не настроена.'}, status=404)
+    if not audio.phone:
+        return JsonResponse({'ok': False, 'message': 'У звонка нет телефона.'})
+    try:
+        client = crm.get_client()
+        surveys = client.find(audio.phone)
+    except crm.CrmError as exc:
+        return JsonResponse({'ok': False, 'message': str(exc)})
+    call_time = timezone.localtime(audio.call_started_at).replace(tzinfo=None) if audio.call_started_at else None
+    chosen = crm.pick_survey(surveys, call_time)
+    gateway = f'http://127.0.0.1:{django_settings.CRM_PROXY_PORT}/'
+    surveys.sort(key=lambda s: s.time or datetime.min, reverse=True)
+    return JsonResponse({
+        'ok': True,
+        'gateway': _gateway_running(),
+        'selected': chosen.id if chosen else None,
+        'surveys': [{
+            'id': s.id,
+            'time': f'{s.time:%d.%m.%Y %H:%M:%S}' if s.time else '',
+            'operator_user_id': s.operator_user_id,
+            'view_url': gateway + s.path,
+            'direct_url': client.url(s.path),
+        } for s in surveys],
+    })
+
+
+@require_GET
+def crm_open(request, pk):
+    """Redirect to this call's survey in the CRM itself (for «Окно рядом»)."""
+    audio = get_object_or_404(AudioFile, pk=pk)
+    try:
+        client = crm.get_client()
+        surveys = client.find(audio.phone) if audio.phone else []
+    except crm.CrmError as exc:
+        return HttpResponse(f'CRM: {exc}', status=502, content_type='text/plain; charset=utf-8')
+    call_time = timezone.localtime(audio.call_started_at).replace(tzinfo=None) if audio.call_started_at else None
+    chosen = crm.pick_survey(surveys, call_time)
+    return redirect(client.url(chosen.path if chosen else 'admin/Reports'))

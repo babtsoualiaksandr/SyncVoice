@@ -5,6 +5,7 @@ from django.core.management.base import BaseCommand
 from waitress import serve
 
 from config.wsgi import application
+from player import crm_proxy
 from player.worker import run_forever
 
 
@@ -18,6 +19,7 @@ class Command(BaseCommand):
     def handle(self, port, no_browser, **options):
         url = f'http://127.0.0.1:{port}/'
         threading.Thread(target=run_forever, daemon=True, name='worker').start()
+        crm_proxy.start()  # read-only gateway that shows CRM surveys in the call page
         if not no_browser:
             threading.Timer(1.5, webbrowser.open, args=[url]).start()
         self.stdout.write(f'SyncVoice работает: {url}\nНе закрывайте это окно. Остановить — Ctrl+C.')

@@ -97,6 +97,15 @@ class SettingsForm(forms.ModelForm):
         help_text='Хранится в Диспетчере учётных данных Windows (на Mac — в Связке ключей). '
                   'Оставьте пустым, чтобы не менять.',
     )
+    crm_url = forms.URLField(
+        label='адрес CRM', required=False, assume_scheme='http',
+        help_text='CRM с анкетами операторов, например http://192.168.12.230. SyncVoice сам находит анкету звонка.',
+    )
+    crm_password = forms.CharField(
+        label='пароль CRM', required=False,
+        widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'}),
+        help_text='Хранится там же, где пароль АТС. Оставьте пустым, чтобы не менять.',
+    )
     interviewers = forms.CharField(
         label='интервьюеры', required=False,
         widget=forms.Textarea(attrs={'rows': 8, 'placeholder': '301 Виолетта\n303 Инна\n308 Марина'}),
@@ -106,7 +115,8 @@ class SettingsForm(forms.ModelForm):
 
     class Meta:
         model = AppSettings
-        fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration', 'max_duration', 'survey_url']
+        fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration',
+                  'max_duration', 'crm_url', 'crm_username', 'crm_password', 'survey_url']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

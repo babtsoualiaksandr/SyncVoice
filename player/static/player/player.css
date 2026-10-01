@@ -556,3 +556,8 @@ table.stations .errorlist { font-size: 0.8rem; }
 }
 .phone-copy:hover { color: var(--accent); border-bottom-color: var(--accent); }
 .copy-note { font-size: 0.85rem; font-weight: 500; }
+.survey-choice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.survey-choice select {
+  font: inherit; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); max-width: 100%;
+}

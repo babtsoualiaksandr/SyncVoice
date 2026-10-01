@@ -1,5 +1,5 @@
 <section class="card survey" id="survey" data-url="{{ survey_url }}"
-         data-check-url="{% url 'player:survey_check' %}">
+         data-check-url="{% url 'player:survey_check' %}" data-lookup-url="{{ crm_lookup_url }}">
   <div class="pane-head">
     <h2>Анкета оператора</h2>
     <span class="pane-tools">
@@ -18,6 +18,12 @@
         </div>
       </details>
     </span>
+  </div>
+
+  <div class="survey-choice" id="survey-choice-row" hidden>
+    <label for="survey-choice" class="hint">Анкета:</label>
+    <select id="survey-choice"></select>
+    <span class="hint" id="survey-choice-note"></span>
   </div>
 
   <div class="survey-blocked flash" id="survey-blocked" hidden>

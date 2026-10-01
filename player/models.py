@@ -56,6 +56,14 @@ class AppSettings(models.Model):
         'макс. длительность звонка, с', default=900,
         help_text='Длиннее не скачиваются. 0 — без ограничения.',
     )
+    crm_url = models.URLField(
+        'адрес CRM', blank=True,
+        help_text='CRM с анкетами операторов, например http://192.168.12.230. SyncVoice сам находит анкету звонка.',
+    )
+    crm_username = models.CharField(
+        'логин CRM (email)', max_length=150, blank=True,
+        help_text='Отдельная учётная запись для SyncVoice. Через SyncVoice анкеты только просматриваются.',
+    )
     survey_url = models.CharField(
         'ссылка на анкету оператора', max_length=500, blank=True,
         help_text='Адрес страницы CRM с ответами респондента. Подстановки: {phone} — 375291234567, '
@@ -184,8 +192,15 @@ class AudioFile(models.Model):
         return reverse('player:detail', args=[self.pk])
 
     def survey_url(self) -> str | None:
-        """Link to this respondent's answers in the operators' CRM, or None."""
-        template = AppSettings.load().survey_url.strip()
+        """Link to this respondent's answers in the operators' CRM, or None.
+
+        With the CRM configured it is SyncVoice's own /crm/open/ link, which
+        finds the survey and redirects to it; otherwise the template link.
+        """
+        settings = AppSettings.load()
+        if settings.crm_url and settings.crm_username and self.phone:
+            return reverse('player:crm_open', args=[self.pk])
+        template = settings.survey_url.strip()
         if not template or not self.phone:
             return None
         started = timezone.localtime(self.call_started_at) if self.call_started_at else None

@@ -28,7 +28,7 @@
         {% endif %}
       {% endfor %}
       <div class="inline-form">
-        <button class="btn" type="button" id="test-connection" data-url="{% url 'player:test_connection' %}">
+        <button class="btn test-btn" type="button" id="test-connection" data-url="{% url 'player:test_connection' %}">
           Проверить подключение
         </button>
         <span class="hint" id="test-result" role="status"></span>
@@ -46,14 +46,33 @@
     </fieldset>
 
     <fieldset>
-      <legend>Анкета операторов (CRM)</legend>
-      {% with field=form.survey_url %}{% include 'player/_field.html' %}{% endwith %}
-      {% if survey_example %}
-        <p class="hint">Пример для последнего звонка ({{ survey_example_call.phone_display }}):
-          <a href="{{ survey_example }}" target="_blank" rel="noopener noreferrer">{{ survey_example }}</a></p>
-      {% endif %}
-      <p class="hint">Страница анкеты показывается на странице звонка рядом с плеером.
-        Если CRM не разрешает показ внутри другой страницы, её можно открыть отдельным окном рядом.</p>
+      <legend>CRM с анкетами операторов</legend>
+      {% with field=form.crm_url %}{% include 'player/_field.html' %}{% endwith %}
+      {% with field=form.crm_username %}{% include 'player/_field.html' %}{% endwith %}
+      {% with field=form.crm_password %}{% include 'player/_field.html' %}{% endwith %}
+      <p class="password-status {% if crm_password_saved %}ok-text{% else %}warn-text{% endif %}">
+        {% if crm_password_saved %}
+          ✓ Пароль CRM для «{{ crm_username }}» сохранён в {{ password_store }}.
+        {% elif crm_username %}
+          Пароль CRM для «{{ crm_username }}» ещё не сохранён — введите его и нажмите «Сохранить».
+        {% else %}
+          Укажите адрес, логин и пароль CRM, чтобы анкета звонка находилась и открывалась сама.
+        {% endif %}
+      </p>
+      <div class="inline-form">
+        <button class="btn test-btn" type="button" data-url="{% url 'player:test_crm' %}">Проверить вход в CRM</button>
+        <span class="hint" role="status"></span>
+      </div>
+
+      <details class="mt" {% if form.survey_url.value %}open{% endif %}>
+        <summary class="hint">Другая система анкет: ссылка-шаблон</summary>
+        <p class="hint">Используется, только если CRM выше не настроена.</p>
+        {% with field=form.survey_url %}{% include 'player/_field.html' %}{% endwith %}
+        {% if survey_example %}
+          <p class="hint">Пример для последнего звонка ({{ survey_example_call.phone_display }}):
+            <a href="{{ survey_example }}" target="_blank" rel="noopener noreferrer">{{ survey_example }}</a></p>
+        {% endif %}
+      </details>
     </fieldset>
 
     <button class="btn btn-primary" type="submit">Сохранить</button>
@@ -64,23 +83,25 @@
 {% block scripts %}
 <script>
   (() => {
-    const btn = document.getElementById('test-connection');
-    const out = document.getElementById('test-result');
     const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
-    btn.addEventListener('click', async () => {
-      btn.disabled = true;
-      out.textContent = 'Подключаюсь…';
-      try {
-        const res = await fetch(btn.dataset.url, { method: 'POST', headers: { 'X-CSRFToken': csrf } });
-        const data = await res.json();
-        out.textContent = data.message;
-        out.className = data.ok ? 'ok-text' : 'error-text';
-      } catch (e) {
-        out.textContent = 'Не удалось выполнить проверку.';
-        out.className = 'error-text';
-      }
-      btn.disabled = false;
-    });
+    for (const btn of document.querySelectorAll('.test-btn')) {
+      const out = btn.nextElementSibling;
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        out.textContent = 'Подключаюсь…';
+        out.className = 'hint';
+        try {
+          const res = await fetch(btn.dataset.url, { method: 'POST', headers: { 'X-CSRFToken': csrf } });
+          const data = await res.json();
+          out.textContent = data.message;
+          out.className = data.ok ? 'ok-text' : 'error-text';
+        } catch (e) {
+          out.textContent = 'Не удалось выполнить проверку.';
+          out.className = 'error-text';
+        }
+        btn.disabled = false;
+      });
+    }
   })();
 </script>
 {% endblock %}

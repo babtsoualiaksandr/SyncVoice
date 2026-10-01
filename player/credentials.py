@@ -1,4 +1,4 @@
-"""PBX password storage in the OS credential store.
+"""PBX and CRM password storage in the OS credential store.
 
 Windows: Credential Manager, macOS: Keychain (via the `keyring` package).
 Keeps the password out of the database, settings files and git.
@@ -7,21 +7,22 @@ import keyring
 from keyring.errors import KeyringError
 
 SERVICE = 'SyncVoice PBX'
+CRM_SERVICE = 'SyncVoice CRM'
 
 
-def get_password(username: str) -> str | None:
+def get_password(username: str, service: str = SERVICE) -> str | None:
     if not username:
         return None
     try:
-        return keyring.get_password(SERVICE, username)
+        return keyring.get_password(service, username)
     except (KeyringError, OSError):
         return None
 
 
-def set_password(username: str, password: str) -> None:
+def set_password(username: str, password: str, service: str = SERVICE) -> None:
     """Store the password and read it back; raise KeyringError if the store didn't keep it."""
-    keyring.set_password(SERVICE, username, password)
-    if keyring.get_password(SERVICE, username) != password:
+    keyring.set_password(service, username, password)
+    if keyring.get_password(service, username) != password:
         raise KeyringError(f'хранилище {store_name()} не сохранило пароль')
 
 

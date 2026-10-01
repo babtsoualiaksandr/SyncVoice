@@ -161,7 +161,8 @@
 
   const surveyBox = document.getElementById('survey');
   if (!surveyBox) return;
-  const url = surveyBox.dataset.url;
+  let url = surveyBox.dataset.url; // shown in the panel
+  let windowUrl = url; // opened by «Окно рядом» (the CRM itself, under the controller's own login)
   const frame = document.getElementById('survey-frame');
   const blocked = document.getElementById('survey-blocked');
   const blockedReason = document.getElementById('survey-blocked-reason');
@@ -173,7 +174,7 @@
     try { return localStorage.getItem(PREFER_KEY) === '1'; } catch (e) { return false; }
   }
 
-  function openWindow(target = url) {
+  function openWindow(target = windowUrl) {
     const half = Math.round(screen.availWidth / 2);
     // The same window name: an open survey window is reused, not duplicated.
     const win = window.open(target, 'syncvoice-survey',
@@ -208,8 +209,70 @@
     frame.src = url;
   }
 
+  // ---- CRM mode: SyncVoice finds the survey of this call and shows it via its gateway ----
+  const choiceRow = document.getElementById('survey-choice-row');
+  const choice = document.getElementById('survey-choice');
+  const choiceNote = document.getElementById('survey-choice-note');
+  let surveys = [];
+
+  function selectSurvey(id) {
+    const s = surveys.find((x) => String(x.id) === String(id));
+    if (!s) return;
+    url = s.view_url;
+    windowUrl = s.direct_url;
+    if (!prefer()) showFrame();
+  }
+
+  async function startCrm() {
+    let data;
+    try {
+      const res = await fetch(surveyBox.dataset.lookupUrl);
+      data = await res.json();
+    } catch (e) {
+      data = { ok: false, message: 'не удалось связаться с SyncVoice' };
+    }
+    if (!data.ok) {
+      showBlocked(`Не удалось найти анкету в CRM: ${data.message}`);
+      return;
+    }
+    surveys = data.surveys;
+    choice.replaceChildren();
+    for (const s of surveys) {
+      const option = document.createElement('option');
+      option.value = s.id;
+      option.textContent = `${s.time || 'без даты'} · оператор ${s.operator_user_id ?? '?'}`
+        + (s.id === data.selected ? ' — этот звонок' : '');
+      choice.append(option);
+    }
+    choiceRow.hidden = !surveys.length;
+    if (!surveys.length) {
+      showBlocked('В CRM нет анкет с этим телефоном.');
+      return;
+    }
+    if (!data.gateway) {
+      showBlocked('Показ анкет внутри SyncVoice работает, только когда SyncVoice запущен ярлыком '
+                  + '(manage.py run_app). Пока можно открыть анкету в окне рядом.');
+    }
+    const initial = data.selected ?? surveys[0].id;
+    choice.value = initial;
+    choiceNote.textContent = data.selected ? '' : 'анкета за день звонка не найдена — показана последняя';
+    if (prefer()) {
+      windowUrl = surveys.find((x) => x.id === initial).direct_url;
+      showBlocked('Анкета открывается отдельным окном и сама переключается на нужного респондента, '
+                  + 'когда вы переходите к другому звонку (‹ ›, Alt+←/→, «Готово → следующий»).');
+      return;
+    }
+    if (data.gateway) selectSurvey(initial);
+  }
+
+  choice.addEventListener('change', () => selectSurvey(choice.value));
+
   async function start() {
     preferWindow.checked = prefer();
+    if (surveyBox.dataset.lookupUrl) {
+      startCrm();
+      return;
+    }
     if (preferWindow.checked) {
       showBlocked('Анкета открывается отдельным окном и сама переключается на нужного респондента, '
                   + 'когда вы переходите к другому звонку (‹ ›, Alt+←/→, «Готово → следующий»).');

@@ -178,6 +178,10 @@ GEMINI_PROXY_USERNAME = os.environ.get('GEMINI_PROXY_USERNAME', '')
 GEMINI_PROXY_PASSWORD = os.environ.get('GEMINI_PROXY_PASSWORD', '')
 
 
+# Local read-only gateway to the operators' CRM (player/crm_proxy.py).
+CRM_PROXY_PORT = int(os.environ.get('CRM_PROXY_PORT', '8766'))
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
