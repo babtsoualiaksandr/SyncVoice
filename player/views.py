@@ -14,7 +14,7 @@ from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_GET, require_POST
 
 from .audio_utils import wav_duration
-from .credentials import set_password
+from .credentials import get_password, set_password, store_name
 from .forms import AudioUploadForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
 from . import analysis
 from . import stations as station_directory
@@ -150,19 +150,33 @@ def status(request):
 
 def settings_view(request):
     settings = AppSettings.load()
+    old_username = settings.pbx_username
     form = SettingsForm(request.POST or None, instance=settings)
     if request.method == 'POST' and form.is_valid():
+        username = form.cleaned_data['pbx_username']
+        password = form.cleaned_data['pbx_password']
+        if not password and username and username != old_username:
+            password = get_password(old_username) or ''  # login renamed: keep the saved password
         try:
-            if form.cleaned_data['pbx_password']:
-                set_password(form.cleaned_data['pbx_username'], form.cleaned_data['pbx_password'])
-        except Exception as exc:
-            form.add_error('pbx_password', f'Не удалось сохранить пароль в хранилище ОС: {exc}')
+            if password and username:
+                set_password(username, password)
+        except Exception as exc:  # keyring backends raise various errors
+            form.add_error('pbx_password', f'Не удалось сохранить пароль в {store_name()}: {exc}')
         else:
             form.save()
             form.save_interviewers()
-            messages.success(request, 'Настройки сохранены.')
+            note = ' Пароль сохранён.' if form.cleaned_data['pbx_password'] else ''
+            messages.success(request, 'Настройки сохранены.' + note)
             return redirect('player:settings')
-    return render(request, 'player/settings.html', {'form': form})
+    if form.errors:
+        messages.error(request, 'Настройки не сохранены — исправьте отмеченные поля.')
+    username = form.instance.pbx_username if form.is_bound else settings.pbx_username
+    return render(request, 'player/settings.html', {
+        'form': form,
+        'password_saved': bool(get_password(username)),
+        'password_username': username,
+        'password_store': store_name(),
+    })
 
 
 def stations_view(request):

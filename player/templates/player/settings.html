@@ -14,6 +14,17 @@
       {% for field in form %}
         {% if field.name in 'pbx_url pbx_username pbx_password pbx_verify_ssl' %}
           {% include 'player/_field.html' %}
+          {% if field.name == 'pbx_password' %}
+            <p class="password-status {% if password_saved %}ok-text{% else %}warn-text{% endif %}" id="password-status">
+              {% if password_saved %}
+                ✓ Пароль для логина «{{ password_username }}» сохранён в {{ password_store }}. Поле пустое специально — пароль не показывается.
+              {% elif password_username %}
+                Пароль для логина «{{ password_username }}» ещё не сохранён — введите его и нажмите «Сохранить».
+              {% else %}
+                Укажите логин и пароль АТС.
+              {% endif %}
+            </p>
+          {% endif %}
         {% endif %}
       {% endfor %}
       <div class="inline-form">

@@ -671,6 +671,65 @@ class EngineTests(TestCase):
             self.assertNotIn('faster_whisper', sys.modules)
 
 
+class FakeKeyring:
+    """In-memory stand-in for the OS credential store."""
+
+    def __init__(self, keep=True):
+        self.store = {}
+        self.keep = keep
+
+    def set_password(self, service, username, password):
+        if self.keep:
+            self.store[service, username] = password
+
+    def get_password(self, service, username):
+        return self.store.get((service, username))
+
+    def get_keyring(self):
+        return self
+
+
+class SettingsPageTests(TestCase):
+    DATA = {'pbx_url': '192.168.3.80', 'pbx_username': 'operator', 'pbx_password': 'secret',
+            'controller': 'ИБ', 'min_duration': 80, 'max_duration': 900, 'interviewers': ''}
+
+    def post(self, keyring, **changes):
+        with mock.patch('player.credentials.keyring', keyring):
+            return self.client.post(reverse('player:settings'), {**self.DATA, **changes}, follow=True)
+
+    def test_password_saved_and_shown_as_saved(self):
+        keyring = FakeKeyring()
+        r = self.post(keyring)
+        self.assertEqual(keyring.store, {('SyncVoice PBX', 'operator'): 'secret'})
+        self.assertContains(r, 'Настройки сохранены. Пароль сохранён.')
+        self.assertContains(r, 'Пароль для логина «operator» сохранён')
+        self.assertNotContains(r, 'secret')  # never rendered back
+
+    def test_address_without_scheme_is_http(self):
+        self.post(FakeKeyring())
+        self.assertEqual(AppSettings.load().pbx_url, 'http://192.168.3.80')
+
+    def test_store_that_does_not_keep_the_password(self):
+        r = self.post(FakeKeyring(keep=False))
+        self.assertContains(r, 'Не удалось сохранить пароль')
+        self.assertContains(r, 'Настройки не сохранены')
+        self.assertEqual(AppSettings.load().pbx_username, '')
+
+    def test_renamed_login_keeps_password(self):
+        keyring = FakeKeyring()
+        self.post(keyring)
+        r = self.post(keyring, pbx_username='operator2', pbx_password='')
+        self.assertEqual(keyring.store[('SyncVoice PBX', 'operator2')], 'secret')
+        self.assertContains(r, 'Пароль для логина «operator2» сохранён')
+
+    def test_empty_password_keeps_the_saved_one(self):
+        keyring = FakeKeyring()
+        self.post(keyring)
+        self.post(keyring, pbx_password='', controller='АБ')
+        self.assertEqual(keyring.store[('SyncVoice PBX', 'operator')], 'secret')
+        self.assertEqual(AppSettings.load().controller, 'АБ')
+
+
 class SettingsFormTests(TestCase):
     def test_interviewers_parsed_and_replaced(self):
         Interviewer.objects.create(extension='301', name='Эдуард')

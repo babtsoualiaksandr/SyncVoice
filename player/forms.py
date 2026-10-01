@@ -84,6 +84,11 @@ _INTERVIEWER_LINE_RE = re.compile(r'^\s*(\d+)\s+(.+?)\s*$')
 
 
 class SettingsForm(forms.ModelForm):
+    # The PBX speaks plain HTTP: «192.168.3.80» must become http://, not Django's default https://.
+    pbx_url = forms.URLField(
+        label='адрес АТС', required=False, assume_scheme='http',
+        help_text='Например, http://192.168.3.80',
+    )
     pbx_password = forms.CharField(
         label='пароль АТС', required=False,
         widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'}),
