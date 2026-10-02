@@ -1559,6 +1559,25 @@ class SurveyCheckRunTests(TestCase):
         self.assertIn('[00:31] Мне 26 неполных.', sent)
         self.assertNotIn(self.audio.phone, sent + fake.calls[0]['config'].system_instruction)
 
+    def test_missing_answer_is_never_an_error(self):
+        result = compare_module.Comparison(review='', summary='Доход не озвучен.', discrepancies=[
+            compare_module.Discrepancy(field='Доля дохода', survey_value='50-75%', call_value='не ответила',
+                                       time='1:07', severity='ошибка', comment='оператор проставил сам'),
+            compare_module.Discrepancy(field='Образование', survey_value='Высшее', call_value='Не спрошено',
+                                       time='', severity='ошибка', comment='вопрос не задан'),
+            compare_module.Discrepancy(field='Возраст', survey_value='59', call_value='57',
+                                       time='0:31', severity='ошибка', comment='в анкете 59'),
+        ])
+        item, fake = self.run_check(result)
+        self.assertEqual([d['severity'] for d in item.discrepancies], ['проверить', 'проверить', 'ошибка'])
+
+    def test_compare_model(self):
+        item, fake = self.run_check()
+        self.assertEqual((fake.calls[0]['model'], item.model_name), ('gemini-test', 'gemini-test'))
+        with override_settings(GEMINI_COMPARE_MODEL='gemini-strong'):
+            item, fake = self.run_check()
+        self.assertEqual((fake.calls[0]['model'], item.model_name), ('gemini-strong', 'gemini-strong'))
+
     def test_no_survey_for_the_call(self):
         self.crm_client.find.return_value = []
         item, fake = self.run_check()
@@ -1621,6 +1640,25 @@ class PromptReviewTests(TestCase):
 
     def test_all_includes_unreviewed(self):
         self.assertEqual(self.run_command('--all').count('## Звонок #'), 2)
+
+    def test_model_needs_rerun(self):
+        from django.core.management.base import CommandError
+        with self.assertRaises(CommandError):
+            self.run_command('--model', 'gemini-strong')
+
+    def test_retry_on_overloaded_model(self):
+        from player.management.commands import prompt_review
+        attempts = []
+
+        def flaky():
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise analysis.RetryLater('503')
+            return 'ok'
+
+        with mock.patch.object(prompt_review.time, 'sleep') as sleep:
+            self.assertEqual(prompt_review._retry(flaky, lambda msg: None), 'ok')
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [5, 15])
 
     def test_bad_ids(self):
         from django.core.management.base import CommandError

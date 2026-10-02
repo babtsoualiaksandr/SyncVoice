@@ -173,6 +173,8 @@ os.environ.setdefault('SSL_CERT_FILE', certifi.where())
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.8-flash')
+# Survey check against the CRM (harder reasoning); empty — the same as GEMINI_MODEL.
+GEMINI_COMPARE_MODEL = os.environ.get('GEMINI_COMPARE_MODEL', '')
 GEMINI_PROXY_URL = os.environ.get('GEMINI_PROXY_URL', '')  # e.g. http://1.2.3.4:3128
 GEMINI_PROXY_USERNAME = os.environ.get('GEMINI_PROXY_USERNAME', '')
 GEMINI_PROXY_PASSWORD = os.environ.get('GEMINI_PROXY_PASSWORD', '')

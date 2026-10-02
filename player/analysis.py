@@ -67,7 +67,10 @@ stations — ровно один вариант по веткам анкеты:
 (респонденты часто называют частоту, например «сто три и семь»). Сначала ищи среди станций, \
 у которых есть частота в городе респондента — именно их список зачитывали на вопросе 7. \
 Пиши станцию точно так, как она указана в «кавычках» в начале строки справочника. \
-Станцию не из справочника напиши как расслышал и добавь «(Другое)».
+Распознавание искажает названия станций: «я не стар», «унистар» — Радио Юнистар; «автор радио», \
+«авторадео» — Авторадио; «рокс» — Радио РОКС. Если искажённое название похоже на станцию из \
+справочника — пиши станцию из справочника. Станцию, которой точно нет в справочнике, напиши как \
+расслышал и добавь «(Другое)».
 
 notes — одно-два коротких предложения для контролёра по-русски, без названий полей (city, stations) \
 и номеров вопросов: на каком ответе основаны поля и что сомнительно (искажённое название города \
@@ -135,7 +138,7 @@ def transcript_text(audio: AudioFile) -> str:
     )
 
 
-def generate(system: str, contents: str, schema, client=None):
+def generate(system: str, contents: str, schema, client=None, model: str | None = None):
     """One structured Gemini request. Returns (parsed schema object, usage).
 
     Raises RetryLater for temporary problems and AnalysisError for permanent ones.
@@ -145,7 +148,7 @@ def generate(system: str, contents: str, schema, client=None):
     client = client or make_client()
     try:
         response = client.models.generate_content(
-            model=settings.GEMINI_MODEL,
+            model=model or settings.GEMINI_MODEL,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system,

@@ -6,6 +6,7 @@ The result is a note for the controller; nothing is changed automatically.
 """
 import json
 import logging
+import re
 
 from django.conf import settings
 from django.utils import timezone
@@ -42,7 +43,8 @@ SYSTEM_PROMPT = """\
 пенсионер / самозанятый / другое. Респонденты называют должность своими словами — сопоставь с вариантом \
 (госслужащий, бухгалтер в госучреждении, педагог → служащий; инженер, врач, программист → специалист; \
 водитель, продавец, уборщица, оператор станка → рабочий; директор, начальник → руководитель). \
-Работающий пенсионер может быть отмечен и пенсионером, и по своей работе — оба варианта верны.
+Работающий пенсионер может быть отмечен и пенсионером, и по своей работе — оба варианта верны; \
+это не расхождение и не рекомендация, не включай его.
 
 Расшифровка сделана автоматически, и это главный источник ложных расхождений:
 - реплики не разделены по говорящим. Строка, где перечисляются варианты ответа («до 25 %, до 50 %, \
@@ -52,15 +54,23 @@ SYSTEM_PROMPT = """\
 «3005» вместо «тридцать пять» или «пятьдесят пять». Если число из анкеты согласуется с частично \
 распознанным (60 и «шесть», 64 и «четыре», 51 и «один»), это не расхождение. Возраст меньше 15 или \
 явно невозможный — ошибка распознавания, а не ответ;
-- слова и названия искажены («Митке», «Нинск», «Минт» — это Минск; «Омель» — Гомель). Не считай \
+- слова и названия искажены («Митке», «Нинск», «Минт», «Минус», «Мед» — это Минск; «Омель» — Гомель). Не считай \
 расхождением то, что объясняется ошибкой распознавания;
+- распознавание теряет куски разговора — это видно по паузам между метками времени (00:43 → 00:57). \
+Если вопроса или ответа нет в расшифровке («не спрошено», «не озвучено»), это только «проверить», \
+никогда не «ошибка»: контролёр прослушает запись;
+- короткие слова путаются: «не рабочий» может быть «ну, рабочий». Если смысл меняется от одной частицы — \
+«проверить»;
 - пол оператор отмечает сам по голосу. По расшифровке его проверить нельзя — пол не сверяй.
 
 Как оценивать, по опыту контролёров:
 - если респондент уточнил или поправил ответ, считается последний ответ («до 30 %… до 50, точно» → 25–50 %);
 - возраст считается полными годами: «26 неполных», «скоро 26» — это 25;
+- «Можно ли перезвонить» сверяй, только если респондент явно отказался, а в анкете «Да»;
 - ответ на границе вариантов или охватывающий два варианта («75 %», «50 %», «70–80 %», «меньше половины») \
-оператор должен был уточнить; если не уточнил — это ошибка. Ответ целиком внутри одного варианта \
+оператор должен был уточнить; если не уточнил — это ошибка. «Половина» — это 50 %, граница; \
+«меньше половины» (25–50 % или 25 % и менее) и «больше половины» (50–75 % или 75 % и более) охватывают \
+два варианта — тоже требуют уточнения. Ответ целиком внутри одного варианта \
 («до 70 %» → 50–75 %, «30 %» → 25–50 %) — не граница, уточнять не нужно;
 - оператор не должен подсказывать ответ («отметьте хотя бы одну станцию») — это рекомендация;
 - радиостанции «вчера» и «за 7 дней» сверяй по ответам о слушании; не путай их между собой.
@@ -147,6 +157,7 @@ def check(audio: AudioFile, answers: dict, gemini_client=None) -> tuple[Comparis
     )
     return analysis.generate(
         SYSTEM_PROMPT.format(questionnaire=analysis.QUESTIONNAIRE), contents, Comparison, gemini_client,
+        model=model_name(),
     )
 
 
@@ -157,13 +168,32 @@ def _same(a: str, b: str) -> bool:
     return norm(a) == norm(b) != ''
 
 
+# «разговор» says the answer isn't in the transcript: only the recording can tell, never an «ошибка».
+NO_ANSWER = re.compile(
+    r'не\s*ответ|нет\s+ответа|не\s*озвуч|не\s*спрош|не\s*зада|неразборчив|не\s*прозвуч|не\s*назва|молчал',
+    re.IGNORECASE,
+)
+
+
+def _severity(d: Discrepancy) -> str:
+    if d.severity not in SEVERITIES:
+        return 'проверить'
+    if d.severity == 'ошибка' and NO_ANSWER.search(d.call_value or ''):
+        return 'проверить'
+    return d.severity
+
+
 def clean(result: Comparison) -> list[dict]:
     """Normalise severities; drop items where the survey already says what was said."""
     return [
-        {**d.model_dump(), 'severity': d.severity if d.severity in SEVERITIES else 'проверить'}
+        {**d.model_dump(), 'severity': _severity(d)}
         for d in result.discrepancies
         if not _same(d.survey_value, d.call_value)
     ]
+
+
+def model_name() -> str:
+    return settings.GEMINI_COMPARE_MODEL or settings.GEMINI_MODEL
 
 
 def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) -> None:
@@ -187,7 +217,7 @@ def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) ->
     item.survey_id = survey.id
     item.discrepancies = clean(result)
     item.summary = result.summary.strip()
-    item.model_name = settings.GEMINI_MODEL
+    item.model_name = model_name()
     item.input_tokens = usage['input_tokens']
     item.output_tokens = usage['output_tokens']
     item.status = CallComparison.Status.DONE
