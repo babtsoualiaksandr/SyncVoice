@@ -1521,11 +1521,14 @@ class CrmSurveyReadingTests(TestCase):
 @override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-test')
 class SurveyCheckRunTests(TestCase):
     RESULT = compare_module.Comparison(
+        review='Возраст: «26 неполных» — респондент, 25, в анкете 26.',
         discrepancies=[
             compare_module.Discrepancy(field='Возраст', survey_value='26', call_value='26 неполных', time='0:31',
                                        severity='ошибка', comment='следовало указать 25'),
-            compare_module.Discrepancy(field='Город', survey_value='Гомель', call_value='Гомель?', time='',
+            compare_module.Discrepancy(field='Город', survey_value='Гомель', call_value='Гродно?', time='',
                                        severity='странное', comment='уточнить'),
+            compare_module.Discrepancy(field='Доля дохода', survey_value='50-75%', call_value='50–75 %', time='',
+                                       severity='проверить', comment='совпадает — отбросить'),
         ],
         summary='Есть ошибка в возрасте.',
     )
@@ -1551,6 +1554,7 @@ class SurveyCheckRunTests(TestCase):
         self.assertEqual((item.status, item.survey_id), ('done', 200))
         self.assertEqual(item.discrepancies[0]['comment'], 'следовало указать 25')
         self.assertEqual(item.discrepancies[1]['severity'], 'проверить')  # unknown severity normalised
+        self.assertEqual(len(item.discrepancies), 2)  # the item where the survey matches the call is dropped
         sent = fake.calls[0]['contents']
         self.assertIn('[00:31] Мне 26 неполных.', sent)
         self.assertNotIn(self.audio.phone, sent + fake.calls[0]['config'].system_instruction)

@@ -182,6 +182,7 @@ class Command(BaseCommand):
                 tokens[0] += usage['input_tokens']
                 tokens[1] += usage['output_tokens']
                 out += self._discrepancies('Заново (текущий промпт)', result.summary, compare.clean(result))
+                out += ['<details><summary>Разбор модели по полям</summary>', '', result.review, '', '</details>', '']
             except (analysis.AnalysisError, analysis.RetryLater) as exc:
                 out += [f'Сверка заново: ошибка — {exc}', '']
 
