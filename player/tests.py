@@ -1745,3 +1745,35 @@ class ExportAiTests(TestCase):
         self.assertEqual(call['comparison']['summary'], 'Расхождений нет.')
         self.assertEqual(call['transcript'], '[00:21] В Минске.')
         self.assertEqual(len(call['phone_hash']), 10)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-test')
+class AnalyzeCallsCommandTests(TestCase):
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'crm_url': 'http://crm.local', 'crm_username': 'sv'})
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=self.audio, index=0, start=1, end=2, text='Минск.')
+        CallComparison.objects.create(audio=self.audio, status=CallComparison.Status.DONE, summary='старая')
+
+    def run_command(self, *args):
+        from django.core.management import call_command
+        call_command('analyze_calls', '--day', '2026-09-25', *args, stdout=io.StringIO())
+        self.audio.refresh_from_db()
+
+    def test_compare_requeues_done_checks_with_force(self):
+        self.run_command('--compare')
+        self.assertEqual(self.audio.comparison.status, 'done')  # without --force a done check is kept
+        self.run_command('--compare', '--force')
+        self.assertEqual(self.audio.comparison.status, 'pending')
+        self.assertEqual(self.audio.analysis.status, 'pending')
+
+    def test_without_compare_checks_are_untouched(self):
+        self.run_command('--force')
+        self.assertEqual(self.audio.comparison.status, 'done')
+        self.assertEqual(self.audio.analysis.status, 'pending')
+
+    def test_compare_needs_crm(self):
+        from django.core.management.base import CommandError
+        AppSettings.objects.filter(pk=1).update(crm_url='')
+        with self.assertRaises(CommandError):
+            self.run_command('--compare')
