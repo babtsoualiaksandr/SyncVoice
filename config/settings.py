@@ -93,8 +93,14 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
-        # The worker thread and web requests write concurrently: wait for locks.
-        'OPTIONS': {'timeout': 20},
+        # The worker thread, web requests and manage.py commands (separate processes) write
+        # concurrently. WAL lets readers and the writer work at once; IMMEDIATE transactions
+        # wait for the write lock (timeout, seconds) instead of failing with «database is locked».
+        'OPTIONS': {
+            'timeout': 20,
+            'transaction_mode': 'IMMEDIATE',
+            'init_command': 'PRAGMA journal_mode=WAL;',
+        },
     }
 }
 
