@@ -1959,3 +1959,37 @@ class ModelFallbackTests(TestCase):
         self.assertContains(self.client.get(reverse('player:settings')), 'Дневной лимит исчерпан')
         ai = self.client.get(reverse('player:status')).json()['ai']
         self.assertEqual(ai['exhausted'][0]['model'], 'gemini-main')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-main')
+class ModelNameTests(TestCase):
+    def form(self, **ai):
+        data = {'min_duration': 30, 'max_duration': 900, 'interviewers': '', **ai}
+        return SettingsForm(data, instance=AppSettings.load())
+
+    def test_trailing_dot_is_dropped(self):
+        form = self.form(ai_fallback_models='gemini-3.5-flash-lite, gemini-2.5-flash-lite.')
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data['ai_fallback_models'], 'gemini-3.5-flash-lite, gemini-2.5-flash-lite')
+
+    def test_bad_names_are_rejected(self):
+        self.assertFalse(self.form(ai_fallback_models='Gemini 3.5 Flash Lite').is_valid())
+        self.assertIn('Запасные модели', str(self.form(ai_model='gemini-a, gemini-b').errors))
+
+    def test_unknown_spare_model_is_skipped(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_fallback_models': 'gemini-typo, gemini-spare'})
+        audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=audio, index=0, start=1, end=2, text='Минск.')
+
+        class Fake(PerModelGemini):
+            def generate_content(self, **kwargs):
+                if kwargs['model'] == 'gemini-typo':
+                    raise genai_errors.ClientError(400, {'error': {
+                        'code': 400, 'message': '* GenerateContentRequest.model: unexpected model name format'}})
+                return super().generate_content(**kwargs)
+
+        analysis.queue(audio)
+        item = audio.analysis
+        analysis.run_analysis(item, client=Fake(SUGGESTION, spent={'gemini-main'}))
+        item.refresh_from_db()
+        self.assertEqual((item.status, item.model_name), (CallAnalysis.Status.DONE, 'gemini-spare'))

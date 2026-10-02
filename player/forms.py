@@ -136,14 +136,13 @@ class SettingsForm(forms.ModelForm):
         )
 
     def clean_ai_model(self):
-        return self.cleaned_data['ai_model'].strip()
+        return _model_names(self.cleaned_data['ai_model'], single=True)
 
     def clean_ai_compare_model(self):
-        return self.cleaned_data['ai_compare_model'].strip()
+        return _model_names(self.cleaned_data['ai_compare_model'], single=True)
 
     def clean_ai_fallback_models(self):
-        names = self.cleaned_data['ai_fallback_models'].replace('\n', ',').split(',')
-        return ', '.join(dict.fromkeys(n.strip() for n in names if n.strip()))
+        return _model_names(self.cleaned_data['ai_fallback_models'])
 
     def clean_survey_url(self):
         url = self.cleaned_data['survey_url'].strip()
@@ -240,6 +239,21 @@ class StationForm(forms.ModelForm):
 
 
 StationFormSet = forms.modelformset_factory(RadioStation, form=StationForm, extra=1, can_delete=True)
+
+
+MODEL_NAME = re.compile(r'^[a-z0-9][a-z0-9.\-]*[a-z0-9]$')
+
+
+def _model_names(value: str, single: bool = False) -> str:
+    """Gemini model names, comma-separated; a stray dot or space at the end is dropped."""
+    names = [n.strip().strip('.;').strip() for n in re.split(r'[,;\n]', value or '')]
+    names = list(dict.fromkeys(n for n in names if n))
+    if single and len(names) > 1:
+        raise forms.ValidationError('Здесь одна модель; запасные — в поле «Запасные модели».')
+    for name in names:
+        if not MODEL_NAME.match(name.removeprefix('models/')):
+            raise forms.ValidationError(f'«{name}» не похоже на имя модели Gemini, например gemini-3.5-flash-lite.')
+    return ', '.join(names)
 
 
 class ControllerReportForm(forms.Form):

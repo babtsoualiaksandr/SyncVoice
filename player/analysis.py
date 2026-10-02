@@ -103,6 +103,10 @@ class RetryLater(Exception):
     """Temporary failure (rate limit, server/network error): keep it queued."""
 
 
+class UnknownModel(AnalysisError):
+    """No such model (a typo in the settings): the next spare model may still answer."""
+
+
 class DailyLimit(RetryLater):
     """The model's free daily request limit ran out: another model may still answer."""
 
@@ -123,7 +127,7 @@ def model(override: str | None = None) -> str:
 def fallback_models() -> list[str]:
     """Spare models from the settings page, in order."""
     text = AppSettings.load().ai_fallback_models.replace('\n', ',')
-    return [name.strip() for name in text.split(',') if name.strip()]
+    return [name.strip().strip('.;').strip() for name in text.split(',') if name.strip().strip('.;')]
 
 
 def model_chain(main: str, override: str | None = None) -> list[str]:
@@ -173,6 +177,11 @@ def generate_any(system: str, contents: str, schema, client, models: list[str]):
             parsed, usage = generate(system, contents, schema, client, model=name)
         except DailyLimit:
             spent[name] = mark_exhausted(name)
+            continue
+        except UnknownModel as exc:
+            if name == models[-1]:
+                raise
+            logger.warning('Gemini model %s skipped: %s', name, exc)
             continue
         return parsed, usage, name
     back = min(spent.values())
@@ -233,6 +242,12 @@ def transcript_text(audio: AudioFile) -> str:
     )
 
 
+def is_unknown_model(exc) -> bool:
+    """400 «unexpected model name format» or 404 «models/… is not found»."""
+    message = (exc.message or '').casefold()
+    return exc.code == 404 or 'model name' in message or ('model' in message and 'not found' in message)
+
+
 def is_daily_limit(exc) -> bool:
     """429 because of the per-day quota (quotaId «…PerDay…»), not the per-minute one."""
     return 'perday' in f'{exc.message} {exc.details}'.casefold().replace('_', '').replace(' ', '')
@@ -263,6 +278,8 @@ def generate(system: str, contents: str, schema, client=None, model: str | None 
             if is_daily_limit(exc):
                 raise DailyLimit(f'Дневной лимит Gemini для {model or settings.GEMINI_MODEL} исчерпан: {exc.message}')
             raise RetryLater(f'Превышен лимит запросов Gemini: {exc.message}')
+        if is_unknown_model(exc):
+            raise UnknownModel(f'Модель Gemini «{model or settings.GEMINI_MODEL}» не найдена ({exc.code}): {exc.message}')
         raise AnalysisError(f'Gemini отклонил запрос ({exc.code}): {exc.message}')
     except errors.ServerError as exc:
         raise RetryLater(f'Ошибка сервера Gemini ({exc.code}): {exc.message}')
