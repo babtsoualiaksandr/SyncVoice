@@ -210,9 +210,8 @@ def clean(result: Comparison) -> list[dict]:
 
 
 def model_name(override: str | None = None) -> str:
-    """Model for the survey check: override, the settings page, .env, then the suggestions' model."""
-    return (override or AppSettings.load().ai_compare_model.strip() or settings.GEMINI_COMPARE_MODEL
-            or analysis.model())
+    """Model for the survey check: override, else as analysis.resolve_models() says."""
+    return analysis.clean_model(override) or analysis.saved_models()[1]['model']
 
 
 def system_prompt(rules: str | None = None) -> str:

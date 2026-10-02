@@ -178,7 +178,8 @@ os.environ.setdefault('SSL_CERT_FILE', certifi.where())
 # The proxy applies to Gemini requests only (not to the PBX or model downloads).
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.8-flash')
+# Empty — player.analysis.DEFAULT_MODEL. The settings page can override both.
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', '')
 # Survey check against the CRM (harder reasoning); empty — the same as GEMINI_MODEL.
 GEMINI_COMPARE_MODEL = os.environ.get('GEMINI_COMPARE_MODEL', '')
 GEMINI_PROXY_URL = os.environ.get('GEMINI_PROXY_URL', '')  # e.g. http://1.2.3.4:3128

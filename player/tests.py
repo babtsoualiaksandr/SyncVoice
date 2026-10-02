@@ -905,7 +905,7 @@ class AnalysisTests(TestCase):
         fake = FakeGemini(SUGGESTION)
         with mock.patch('player.analysis.make_client', return_value=fake):
             r = self.client.post(reverse('player:ai_try'), {
-                'kind': 'analysis', 'audio': self.audio.pk, 'rules': 'Черновик правила.', 'model': 'gemini-x'})
+                'kind': 'analysis', 'audio': self.audio.pk, 'rules': 'Черновик правила.', 'main_model': 'gemini-x.'})
         data = r.json()
         self.assertTrue(data['ok'])
         self.assertEqual((data['fields']['city'], data['model'], data['tokens']), ('Минск', 'gemini-x', 1000))
@@ -1993,3 +1993,51 @@ class ModelNameTests(TestCase):
         analysis.run_analysis(item, client=Fake(SUGGESTION, spent={'gemini-main'}))
         item.refresh_from_db()
         self.assertEqual((item.status, item.model_name), (CallAnalysis.Status.DONE, 'gemini-spare'))
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='', GEMINI_COMPARE_MODEL='')
+class ModelChoiceTests(TestCase):
+    """Where the suggestions' and the survey check's models come from: settings page > .env > default."""
+
+    def models(self):
+        from . import compare as c
+        return analysis.model(), c.model_name()
+
+    def test_default_when_env_is_empty(self):
+        self.assertEqual(self.models(), (analysis.DEFAULT_MODEL, analysis.DEFAULT_MODEL))
+
+    def test_env_values_are_cleaned(self):
+        with override_settings(GEMINI_MODEL=' "gemini-env." ', GEMINI_COMPARE_MODEL='models/gemini-env-strong'):
+            self.assertEqual(self.models(), ('gemini-env', 'gemini-env-strong'))
+
+    def test_compare_falls_back_to_the_suggestions_model(self):
+        with override_settings(GEMINI_MODEL='gemini-env'):
+            self.assertEqual(self.models(), ('gemini-env', 'gemini-env'))
+            AppSettings.objects.update_or_create(pk=1, defaults={'ai_model': 'gemini-page'})
+            self.assertEqual(self.models(), ('gemini-page', 'gemini-page'))
+
+    def test_settings_page_wins_over_env(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_model': 'gemini-page.', 'ai_compare_model': 'gemini-page-strong'})
+        with override_settings(GEMINI_MODEL='gemini-env', GEMINI_COMPARE_MODEL='gemini-env-strong'):
+            self.assertEqual(self.models(), ('gemini-page', 'gemini-page-strong'))
+            main, check = analysis.saved_models()
+            self.assertEqual((main['source'], check['source']), ('настройки', 'настройки'))
+
+    def test_env_compare_model_wins_over_the_page_suggestions_model(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_model': 'gemini-page'})
+        with override_settings(GEMINI_COMPARE_MODEL='gemini-env-strong'):
+            self.assertEqual(self.models(), ('gemini-page', 'gemini-env-strong'))
+
+    def test_settings_page_shows_models_in_use(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_fallback_models': 'gemini-spare'})
+        with override_settings(GEMINI_MODEL='gemini-env'):
+            r = self.client.get(reverse('player:settings'))
+        self.assertContains(r, '<b>gemini-env</b> (.env GEMINI_MODEL)', html=False)
+        self.assertContains(r, 'при дневном лимите — gemini-spare')
+
+    def test_try_on_call_resolves_compare_model_like_the_worker(self):
+        main, check = analysis.resolve_models('gemini-typed', '')
+        self.assertEqual(check['model'], 'gemini-typed')
+        with override_settings(GEMINI_COMPARE_MODEL='gemini-env-strong'):
+            main, check = analysis.resolve_models('gemini-typed', '')
+            self.assertEqual(check['model'], 'gemini-env-strong')

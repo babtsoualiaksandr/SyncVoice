@@ -74,12 +74,13 @@ class AppSettings(models.Model):
     )
     ai_model = models.CharField(
         'модель для подсказок полей', max_length=64, blank=True,
-        help_text='Например, gemini-3.1-flash-lite. Пусто — из файла .env (GEMINI_MODEL).',
+        help_text='Например, gemini-3.1-flash-lite. Пусто — из файла .env (GEMINI_MODEL), '
+                  'а если и там пусто — gemini-3.1-flash-lite.',
     )
     ai_compare_model = models.CharField(
         'модель для сверки анкеты', max_length=64, blank=True,
         help_text='Сверке нужно больше рассуждений — можно взять модель сильнее, например gemini-3.8-flash. '
-                  'Пусто — та же, что для подсказок.',
+                  'Пусто — из файла .env (GEMINI_COMPARE_MODEL), а если и там пусто — та же, что для подсказок.',
     )
     ai_rules_analysis = models.TextField(
         'дополнительные правила для подсказок полей', blank=True,

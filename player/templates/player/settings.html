@@ -75,7 +75,8 @@
       </details>
     </fieldset>
 
-    <fieldset class="ai-settings" id="ai-settings" data-try-url="{% url 'player:ai_try' %}">
+    <fieldset class="ai-settings" id="ai-settings" data-try-url="{% url 'player:ai_try' %}"
+              data-main-model="{{ form.ai_model.id_for_label }}" data-compare-model="{{ form.ai_compare_model.id_for_label }}">
       <legend>ИИ (Gemini)</legend>
       {% if not ai_enabled %}
         <p class="warn-text">Не задан GEMINI_API_KEY в файле .env — подсказки и сверка выключены.</p>
@@ -83,6 +84,11 @@
       {% with field=form.ai_model %}{% include 'player/_field.html' %}{% endwith %}
       {% with field=form.ai_compare_model %}{% include 'player/_field.html' %}{% endwith %}
       {% with field=form.ai_fallback_models %}{% include 'player/_field.html' %}{% endwith %}
+      <p class="hint" id="models-in-use">Сейчас используется:
+        подсказки — <b>{{ models_in_use.0.model }}</b> ({{ models_in_use.0.source }}),
+        сверка — <b>{{ models_in_use.1.model }}</b> ({{ models_in_use.1.source }}){% if fallback_in_use %},
+        при дневном лимите — {{ fallback_in_use|join:", " }}{% endif %}.
+      </p>
       {% if exhausted_models %}
         <p class="warn-text">Дневной лимит исчерпан:
           {% for name, until in exhausted_models.items %}{{ name }} — до {{ until|date:"d.m H:i" }}{% if not forloop.last %}; {% endif %}{% endfor %}.
@@ -106,7 +112,7 @@
       {% with field=form.ai_rules_analysis %}{% include 'player/_field.html' %}{% endwith %}
       <div class="inline-form">
         <button class="btn ai-try-btn" type="button" data-kind="analysis"
-                data-rules="{{ form.ai_rules_analysis.id_for_label }}" data-model="{{ form.ai_model.id_for_label }}"
+                data-rules="{{ form.ai_rules_analysis.id_for_label }}"
                 {% if not ai_enabled %}disabled{% endif %}>Проверить на звонке</button>
         <span class="hint" role="status"></span>
       </div>
@@ -120,8 +126,7 @@
       {% with field=form.ai_rules_compare %}{% include 'player/_field.html' %}{% endwith %}
       <div class="inline-form">
         <button class="btn ai-try-btn" type="button" data-kind="compare"
-                data-rules="{{ form.ai_rules_compare.id_for_label }}" data-model="{{ form.ai_compare_model.id_for_label }}"
-                data-model-fallback="{{ form.ai_model.id_for_label }}"
+                data-rules="{{ form.ai_rules_compare.id_for_label }}"
                 {% if not compare_enabled %}disabled title="Нужны ключ Gemini и настроенная CRM"{% endif %}>Проверить на звонке</button>
         <span class="hint" role="status"></span>
       </div>
@@ -208,10 +213,11 @@
       const status = btn.nextElementSibling;
       const out = btn.parentElement.nextElementSibling;
       btn.addEventListener('click', async () => {
-        const model = document.getElementById(btn.dataset.model).value.trim()
-          || (btn.dataset.modelFallback ? document.getElementById(btn.dataset.modelFallback).value.trim() : '');
+        // Both model fields as typed: the server picks the model the same way the worker does.
         const body = new URLSearchParams({
-          kind: btn.dataset.kind, audio: callSelect.value, model,
+          kind: btn.dataset.kind, audio: callSelect.value,
+          main_model: document.getElementById(box.dataset.mainModel).value,
+          compare_model: document.getElementById(box.dataset.compareModel).value,
           rules: document.getElementById(btn.dataset.rules).value,
         });
         btn.disabled = true;

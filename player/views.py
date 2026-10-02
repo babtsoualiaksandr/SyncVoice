@@ -244,6 +244,8 @@ def settings_view(request):
         'ai_enabled': analysis.enabled(),
         'compare_enabled': compare.enabled(),
         'exhausted_models': analysis.exhausted_models(),
+        'models_in_use': analysis.saved_models(),
+        'fallback_in_use': analysis.fallback_models(),
         'builtin_analysis_prompt': analysis.system_prompt(rules=''),
         'builtin_compare_prompt': compare.system_prompt(rules=''),
         'try_calls': AudioFile.objects.filter(status=AudioFile.Status.DONE)
@@ -304,7 +306,9 @@ def ai_try(request):
         return JsonResponse({'ok': False, 'message': 'Выберите распознанный звонок.'})
     kind = request.POST.get('kind')
     rules = request.POST.get('rules', '')
-    model = request.POST.get('model', '').strip() or None
+    # The models typed on the page (maybe not saved), resolved the same way the worker does.
+    main, check = analysis.resolve_models(request.POST.get('main_model', ''), request.POST.get('compare_model', ''))
+    model = (main if kind == 'analysis' else check)['model']
     try:
         if kind == 'analysis':
             fields, usage = analysis.suggest_fields(audio, rules=rules, model_override=model)

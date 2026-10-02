@@ -119,20 +119,55 @@ def enabled() -> bool:
     return bool(settings.GEMINI_API_KEY)
 
 
+DEFAULT_MODEL = 'gemini-3.1-flash-lite'
+
+
+def clean_model(name: str | None) -> str:
+    """A model name as typed in .env or the settings: no spaces, quotes, «models/» or a stray dot at the end."""
+    name = (name or '').strip().strip('"\'').strip().rstrip('.,;').strip()
+    return name.removeprefix('models/')
+
+
+def resolve_models(ai_model: str = '', ai_compare_model: str = '') -> tuple[dict, dict]:
+    """Which model the suggestions and the survey check use, and where it comes from.
+
+    Suggestions: the settings page, else GEMINI_MODEL in .env, else DEFAULT_MODEL.
+    Survey check: the settings page, else GEMINI_COMPARE_MODEL in .env, else the suggestions' model.
+    """
+    if name := clean_model(ai_model):
+        main = {'model': name, 'source': 'настройки'}
+    elif name := clean_model(settings.GEMINI_MODEL):
+        main = {'model': name, 'source': '.env GEMINI_MODEL'}
+    else:
+        main = {'model': DEFAULT_MODEL, 'source': 'по умолчанию'}
+    if name := clean_model(ai_compare_model):
+        check = {'model': name, 'source': 'настройки'}
+    elif name := clean_model(settings.GEMINI_COMPARE_MODEL):
+        check = {'model': name, 'source': '.env GEMINI_COMPARE_MODEL'}
+    else:
+        check = {'model': main['model'], 'source': 'как для подсказок'}
+    return main, check
+
+
+def saved_models() -> tuple[dict, dict]:
+    app = AppSettings.load()
+    return resolve_models(app.ai_model, app.ai_compare_model)
+
+
 def model(override: str | None = None) -> str:
-    """Model for the field suggestions: this run's override, the settings page, then .env."""
-    return override or AppSettings.load().ai_model.strip() or settings.GEMINI_MODEL
+    """Model for the field suggestions: this run's override, else as resolve_models() says."""
+    return clean_model(override) or saved_models()[0]['model']
 
 
 def fallback_models() -> list[str]:
     """Spare models from the settings page, in order."""
     text = AppSettings.load().ai_fallback_models.replace('\n', ',')
-    return [name.strip().strip('.;').strip() for name in text.split(',') if name.strip().strip('.;')]
+    return [name for name in map(clean_model, text.split(',')) if name]
 
 
 def model_chain(main: str, override: str | None = None) -> list[str]:
     """Models to try in turn: an explicit override alone, else the main model and the spare ones."""
-    if override:
+    if override := clean_model(override):
         return [override]
     return list(dict.fromkeys([main, *fallback_models()]))
 
@@ -263,7 +298,7 @@ def generate(system: str, contents: str, schema, client=None, model: str | None 
     client = client or make_client()
     try:
         response = client.models.generate_content(
-            model=model or settings.GEMINI_MODEL,
+            model=model or DEFAULT_MODEL,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system,
@@ -276,10 +311,10 @@ def generate(system: str, contents: str, schema, client=None, model: str | None 
     except errors.ClientError as exc:
         if exc.code == 429:
             if is_daily_limit(exc):
-                raise DailyLimit(f'Дневной лимит Gemini для {model or settings.GEMINI_MODEL} исчерпан: {exc.message}')
+                raise DailyLimit(f'Дневной лимит Gemini для {model or DEFAULT_MODEL} исчерпан: {exc.message}')
             raise RetryLater(f'Превышен лимит запросов Gemini: {exc.message}')
         if is_unknown_model(exc):
-            raise UnknownModel(f'Модель Gemini «{model or settings.GEMINI_MODEL}» не найдена ({exc.code}): {exc.message}')
+            raise UnknownModel(f'Модель Gemini «{model or DEFAULT_MODEL}» не найдена ({exc.code}): {exc.message}')
         raise AnalysisError(f'Gemini отклонил запрос ({exc.code}): {exc.message}')
     except errors.ServerError as exc:
         raise RetryLater(f'Ошибка сервера Gemini ({exc.code}): {exc.message}')
