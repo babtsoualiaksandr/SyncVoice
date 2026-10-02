@@ -614,3 +614,13 @@ table.stations .errorlist { font-size: 0.8rem; }
 .severity-рекомендация .compare-badge { color: var(--ok); }
 .compare-values { margin: 2px 0; }
 .link-btn:disabled { color: var(--ok); text-decoration: none; cursor: default; }
+
+/* ---------- settings: AI rules ---------- */
+.ai-block-title { font-size: 1rem; margin: 18px 0 8px; }
+.prompt-text {
+  white-space: pre-wrap; font-size: 0.8rem; max-height: 340px; overflow: auto;
+  background: var(--bg, #f6f7f9); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+}
+.ai-try-result { border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
+.ai-try-result p { margin: 4px 0; }
+.ai-settings select { max-width: 100%; }

@@ -4,6 +4,7 @@ Only the transcript text goes to Google — no audio, phone number or
 interviewer. The result is a suggestion: the controller checks it while
 listening, the review form stays editable.
 """
+import hashlib
 import logging
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -12,7 +13,7 @@ from django.conf import settings
 from pydantic import BaseModel, Field
 
 from . import stations as station_directory
-from .models import AudioFile, CallAnalysis
+from .models import AppSettings, AudioFile, CallAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +101,34 @@ class RetryLater(Exception):
     """Temporary failure (rate limit, server/network error): keep it queued."""
 
 
+RULES_HEADER = ('Дополнительные правила контролёров. Если они расходятся с общими правилами выше — '
+                'следуй им:')
+
+
 def enabled() -> bool:
     return bool(settings.GEMINI_API_KEY)
+
+
+def model(override: str | None = None) -> str:
+    """Model for the field suggestions: this run's override, the settings page, then .env."""
+    return override or AppSettings.load().ai_model.strip() or settings.GEMINI_MODEL
+
+
+def with_rules(prompt: str, rules: str) -> str:
+    """The built-in prompt plus the controllers' own rules from the settings page."""
+    rules = (rules or '').strip()
+    return f'{prompt}\n{RULES_HEADER}\n{rules}\n' if rules else prompt
+
+
+def prompt_version(prompt: str) -> str:
+    """Short fingerprint of a system prompt: shows which answers came from which prompt."""
+    return hashlib.sha1(prompt.encode()).hexdigest()[:8]
+
+
+def system_prompt(rules: str | None = None) -> str:
+    """The field-suggestion prompt; `rules` None — the controllers' rules saved in the settings."""
+    base = SYSTEM_PROMPT.format(stations=station_directory.prompt_block(), questionnaire=QUESTIONNAIRE)
+    return with_rules(base, AppSettings.load().ai_rules_analysis if rules is None else rules)
 
 
 def proxy_url() -> str | None:
@@ -182,14 +209,15 @@ def generate(system: str, contents: str, schema, client=None, model: str | None 
     return parsed, usage
 
 
-def suggest_fields(audio: AudioFile, client=None) -> tuple[SuggestedFields, dict]:
-    """Ask Gemini for the report fields. Returns (fields, usage)."""
-    return generate(
-        SYSTEM_PROMPT.format(stations=station_directory.prompt_block(), questionnaire=QUESTIONNAIRE),
-        f'Расшифровка звонка:\n\n{transcript_text(audio)}',
-        SuggestedFields,
-        client,
+def suggest_fields(audio: AudioFile, client=None, rules: str | None = None,
+                   model_override: str | None = None) -> tuple[SuggestedFields, dict]:
+    """Ask Gemini for the report fields. Returns (fields, usage); usage also names the model and prompt version."""
+    system = system_prompt(rules)
+    name = model(model_override)
+    fields, usage = generate(
+        system, f'Расшифровка звонка:\n\n{transcript_text(audio)}', SuggestedFields, client, model=name,
     )
+    return fields, {**usage, 'model': name, 'prompt_version': prompt_version(system)}
 
 
 def queue(audio: AudioFile) -> None:
@@ -218,7 +246,8 @@ def run_analysis(analysis: CallAnalysis, client=None) -> None:
     analysis.listen_city = fields.listen_city.strip()
     analysis.stations = fields.stations.strip()
     analysis.notes = fields.notes.strip()
-    analysis.model_name = settings.GEMINI_MODEL
+    analysis.model_name = usage['model']
+    analysis.prompt_version = usage['prompt_version']
     analysis.input_tokens = usage['input_tokens']
     analysis.output_tokens = usage['output_tokens']
     analysis.status = CallAnalysis.Status.DONE

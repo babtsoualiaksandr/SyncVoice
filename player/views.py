@@ -221,6 +221,12 @@ def settings_view(request):
         'password_store': store_name(),
         'survey_example_call': (example := AudioFile.objects.exclude(phone='').first()),
         'survey_example': example.survey_url() if example else None,
+        'ai_enabled': analysis.enabled(),
+        'compare_enabled': compare.enabled(),
+        'builtin_analysis_prompt': analysis.system_prompt(rules=''),
+        'builtin_compare_prompt': compare.system_prompt(rules=''),
+        'try_calls': AudioFile.objects.filter(status=AudioFile.Status.DONE)
+                     .order_by('-call_started_at', '-created_at')[:50],
     })
 
 
@@ -264,6 +270,39 @@ def test_connection(request):
     except PbxError as exc:
         return JsonResponse({'ok': False, 'message': str(exc)})
     return JsonResponse({'ok': True, 'message': 'Подключение к АТС работает.'})
+
+
+@require_POST
+def ai_try(request):
+    """Run the field suggestion or the survey check on one call with the rules typed on the
+    settings page (not saved yet). Nothing is stored — a sandbox for tuning the rules."""
+    if not analysis.enabled():
+        return JsonResponse({'ok': False, 'message': 'Не задан GEMINI_API_KEY в файле .env.'})
+    audio = AudioFile.objects.filter(pk=request.POST.get('audio') or 0, status=AudioFile.Status.DONE).first()
+    if not audio:
+        return JsonResponse({'ok': False, 'message': 'Выберите распознанный звонок.'})
+    kind = request.POST.get('kind')
+    rules = request.POST.get('rules', '')
+    model = request.POST.get('model', '').strip() or None
+    try:
+        if kind == 'analysis':
+            fields, usage = analysis.suggest_fields(audio, rules=rules, model_override=model)
+            result = {'fields': fields.model_dump()}
+        elif kind == 'compare':
+            if not crm.configured():
+                return JsonResponse({'ok': False, 'message': 'Для сверки настройте CRM.'})
+            survey, answers = compare.find_answers(audio)
+            if not survey:
+                return JsonResponse({'ok': False, 'message': 'Анкета этого звонка в CRM не найдена.'})
+            comparison, usage = compare.check(audio, answers, rules=rules, model_override=model)
+            result = {'summary': comparison.summary, 'review': comparison.review,
+                      'discrepancies': compare.clean(comparison)}
+        else:
+            return JsonResponse({'ok': False, 'message': 'Неизвестная проверка.'}, status=400)
+    except (analysis.AnalysisError, analysis.RetryLater, crm.CrmError) as exc:
+        return JsonResponse({'ok': False, 'message': str(exc)})
+    return JsonResponse({'ok': True, **result, 'model': usage['model'], 'prompt_version': usage['prompt_version'],
+                         'tokens': usage['input_tokens'] + usage['output_tokens']})
 
 
 @require_POST

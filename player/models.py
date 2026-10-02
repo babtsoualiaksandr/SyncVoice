@@ -72,6 +72,25 @@ class AppSettings(models.Model):
                   '{phone_local} — 291234567, {date} — 2026-09-29, {date_ru} — 29.09.2026, '
                   '{time} — 14:01, {operator} — 301, {call_id}. Пусто — панели анкеты нет.',
     )
+    ai_model = models.CharField(
+        'модель для подсказок полей', max_length=64, blank=True,
+        help_text='Например, gemini-3.1-flash-lite. Пусто — из файла .env (GEMINI_MODEL).',
+    )
+    ai_compare_model = models.CharField(
+        'модель для сверки анкеты', max_length=64, blank=True,
+        help_text='Сверке нужно больше рассуждений — можно взять модель сильнее, например gemini-3.8-flash. '
+                  'Пусто — та же, что для подсказок.',
+    )
+    ai_rules_analysis = models.TextField(
+        'дополнительные правила для подсказок полей', blank=True,
+        help_text='Своими словами, по одному правилу на строку. Добавляются к встроенному промпту '
+                  'и важнее его общих правил.',
+    )
+    ai_rules_compare = models.TextField(
+        'дополнительные правила для сверки анкеты', blank=True,
+        help_text='Например: «Ответ "где-то половина" — граница, оператор должен уточнить». '
+                  'Добавляются к встроенному промпту и важнее его общих правил.',
+    )
     worker_seen_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
@@ -299,6 +318,9 @@ class CallAnalysis(models.Model):
     stations = models.CharField('радиостанции / не слушал', max_length=255, blank=True)
     notes = models.TextField('пояснение', blank=True)
     model_name = models.CharField('модель', max_length=64, blank=True)
+    prompt_version = models.CharField(
+        'версия промпта', max_length=16, blank=True, help_text='Первые знаки хэша промпта, с которым сделан ответ.',
+    )
     input_tokens = models.PositiveIntegerField('токенов на входе', default=0)
     output_tokens = models.PositiveIntegerField('токенов на выходе', default=0)
     error = models.TextField('ошибка', blank=True)
@@ -328,6 +350,9 @@ class CallComparison(models.Model):
     discrepancies = models.JSONField('расхождения', default=list, blank=True)
     summary = models.TextField('итог', blank=True)
     model_name = models.CharField('модель', max_length=64, blank=True)
+    prompt_version = models.CharField(
+        'версия промпта', max_length=16, blank=True, help_text='Первые знаки хэша промпта, с которым сделан ответ.',
+    )
     input_tokens = models.PositiveIntegerField('токенов на входе', default=0)
     output_tokens = models.PositiveIntegerField('токенов на выходе', default=0)
     error = models.TextField('ошибка', blank=True)

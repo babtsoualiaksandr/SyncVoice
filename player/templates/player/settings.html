@@ -75,6 +75,57 @@
       </details>
     </fieldset>
 
+    <fieldset class="ai-settings" id="ai-settings" data-try-url="{% url 'player:ai_try' %}">
+      <legend>ИИ (Gemini)</legend>
+      {% if not ai_enabled %}
+        <p class="warn-text">Не задан GEMINI_API_KEY в файле .env — подсказки и сверка выключены.</p>
+      {% endif %}
+      {% with field=form.ai_model %}{% include 'player/_field.html' %}{% endwith %}
+      {% with field=form.ai_compare_model %}{% include 'player/_field.html' %}{% endwith %}
+
+      <div class="field">
+        <label for="ai-try-call">Звонок для проверки правил</label>
+        <select id="ai-try-call">
+          {% for call in try_calls %}
+            <option value="{{ call.pk }}">#{{ call.pk }} · {% if call.call_started_at %}{{ call.call_started_at|date:"d.m H:i" }}{% endif %} · {{ call.phone_display|default:call }}{% if call.operator %} · внутр. {{ call.operator }}{% endif %}</option>
+          {% empty %}
+            <option value="">нет распознанных звонков</option>
+          {% endfor %}
+        </select>
+        <small class="hint">«Проверить на звонке» берёт правила и модель прямо из полей ниже, даже несохранённые.
+          Ничего не сохраняется; запрос к Gemini тратит токены.</small>
+      </div>
+
+      <h3 class="ai-block-title">Подсказки полей (город, станции)</h3>
+      {% with field=form.ai_rules_analysis %}{% include 'player/_field.html' %}{% endwith %}
+      <div class="inline-form">
+        <button class="btn ai-try-btn" type="button" data-kind="analysis"
+                data-rules="{{ form.ai_rules_analysis.id_for_label }}" data-model="{{ form.ai_model.id_for_label }}"
+                {% if not ai_enabled %}disabled{% endif %}>Проверить на звонке</button>
+        <span class="hint" role="status"></span>
+      </div>
+      <div class="ai-try-result" hidden></div>
+      <details class="mt">
+        <summary class="hint">Встроенный промпт подсказок (только для чтения)</summary>
+        <pre class="prompt-text">{{ builtin_analysis_prompt }}</pre>
+      </details>
+
+      <h3 class="ai-block-title">Сверка анкеты оператора с разговором</h3>
+      {% with field=form.ai_rules_compare %}{% include 'player/_field.html' %}{% endwith %}
+      <div class="inline-form">
+        <button class="btn ai-try-btn" type="button" data-kind="compare"
+                data-rules="{{ form.ai_rules_compare.id_for_label }}" data-model="{{ form.ai_compare_model.id_for_label }}"
+                data-model-fallback="{{ form.ai_model.id_for_label }}"
+                {% if not compare_enabled %}disabled title="Нужны ключ Gemini и настроенная CRM"{% endif %}>Проверить на звонке</button>
+        <span class="hint" role="status"></span>
+      </div>
+      <div class="ai-try-result" hidden></div>
+      <details class="mt">
+        <summary class="hint">Встроенный промпт сверки (только для чтения)</summary>
+        <pre class="prompt-text">{{ builtin_compare_prompt }}</pre>
+      </details>
+    </fieldset>
+
     <button class="btn btn-primary" type="submit">Сохранить</button>
   </form>
 </section>
@@ -98,6 +149,81 @@
         } catch (e) {
           out.textContent = 'Не удалось выполнить проверку.';
           out.className = 'error-text';
+        }
+        btn.disabled = false;
+      });
+    }
+  })();
+
+  // «Проверить на звонке»: run the AI with the rules typed above, show the answer, store nothing.
+  (() => {
+    const box = document.getElementById('ai-settings');
+    if (!box) return;
+    const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    const callSelect = document.getElementById('ai-try-call');
+    const el = (tag, text, cls) => {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      if (cls) node.className = cls;
+      return node;
+    };
+
+    function render(out, kind, data) {
+      out.replaceChildren();
+      if (kind === 'analysis') {
+        const f = data.fields;
+        for (const [label, value] of [['Город', f.city], ['Город слушания', f.listen_city],
+                                      ['Радиостанции', f.stations], ['Заметка', f.notes]]) {
+          const p = el('p');
+          p.append(el('b', `${label}: `), document.createTextNode(value || '—'));
+          out.append(p);
+        }
+      } else {
+        out.append(el('p', data.summary));
+        const list = el('ul', undefined, 'compare-list');
+        for (const d of data.discrepancies) {
+          const li = el('li', undefined, `compare-item severity-${d.severity}`);
+          li.append(el('span', d.severity, 'compare-badge'), document.createTextNode(' '),
+                    el('strong', d.field), document.createTextNode(d.time ? ` [${d.time}]` : ''));
+          li.append(el('div', `анкета: ${d.survey_value || '—'} · разговор: ${d.call_value || '—'}`, 'compare-values'));
+          if (d.comment) li.append(el('div', d.comment, 'hint'));
+          list.append(li);
+        }
+        out.append(list);
+        const details = el('details');
+        details.append(el('summary', 'Разбор модели по полям', 'hint'), el('p', data.review, 'hint'));
+        out.append(details);
+      }
+      out.append(el('p', `${data.model} · промпт ${data.prompt_version} · ${data.tokens} токенов`, 'hint'));
+      out.hidden = false;
+    }
+
+    for (const btn of box.querySelectorAll('.ai-try-btn')) {
+      const status = btn.nextElementSibling;
+      const out = btn.parentElement.nextElementSibling;
+      btn.addEventListener('click', async () => {
+        const model = document.getElementById(btn.dataset.model).value.trim()
+          || (btn.dataset.modelFallback ? document.getElementById(btn.dataset.modelFallback).value.trim() : '');
+        const body = new URLSearchParams({
+          kind: btn.dataset.kind, audio: callSelect.value, model,
+          rules: document.getElementById(btn.dataset.rules).value,
+        });
+        btn.disabled = true;
+        status.textContent = 'Спрашиваю Gemini…';
+        status.className = 'hint';
+        try {
+          const res = await fetch(box.dataset.tryUrl, { method: 'POST', headers: { 'X-CSRFToken': csrf }, body });
+          const data = await res.json();
+          if (data.ok) {
+            status.textContent = '';
+            render(out, btn.dataset.kind, data);
+          } else {
+            status.textContent = data.message;
+            status.className = 'error-text';
+          }
+        } catch (e) {
+          status.textContent = 'Не удалось выполнить проверку.';
+          status.className = 'error-text';
         }
         btn.disabled = false;
       });

@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 
 from django import forms
+from django.conf import settings as django_settings
 
 from .models import CITIES, AppSettings, AudioFile, CallReview, Interviewer, RadioStation, parse_call_name
 
@@ -116,13 +117,29 @@ class SettingsForm(forms.ModelForm):
     class Meta:
         model = AppSettings
         fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration',
-                  'max_duration', 'crm_url', 'crm_username', 'crm_password', 'survey_url']
+                  'max_duration', 'crm_url', 'crm_username', 'crm_password', 'survey_url',
+                  'ai_model', 'ai_compare_model', 'ai_rules_analysis', 'ai_rules_compare']
+        widgets = {
+            'ai_rules_analysis': forms.Textarea(attrs={'rows': 5}),
+            'ai_rules_compare': forms.Textarea(attrs={'rows': 5}),
+        }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['interviewers'].initial = '\n'.join(
             f'{i.extension} {i.name}' for i in Interviewer.objects.all()
         )
+        # Show what an empty model field means right now.
+        self.fields['ai_model'].widget.attrs['placeholder'] = django_settings.GEMINI_MODEL
+        self.fields['ai_compare_model'].widget.attrs['placeholder'] = (
+            django_settings.GEMINI_COMPARE_MODEL or 'как для подсказок'
+        )
+
+    def clean_ai_model(self):
+        return self.cleaned_data['ai_model'].strip()
+
+    def clean_ai_compare_model(self):
+        return self.cleaned_data['ai_compare_model'].strip()
 
     def clean_survey_url(self):
         url = self.cleaned_data['survey_url'].strip()

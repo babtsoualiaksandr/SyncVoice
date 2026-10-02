@@ -775,6 +775,18 @@ class SettingsPageTests(TestCase):
         self.assertContains(r, 'Пароль для логина «operator» сохранён')
         self.assertNotContains(r, 'secret')  # never rendered back
 
+    def test_ai_settings_saved(self):
+        self.post(FakeKeyring(), ai_model=' gemini-lite ', ai_compare_model='gemini-strong',
+                  ai_rules_compare='«Половина» — граница.')
+        saved = AppSettings.load()
+        self.assertEqual((saved.ai_model, saved.ai_compare_model, saved.ai_rules_compare),
+                         ('gemini-lite', 'gemini-strong', '«Половина» — граница.'))
+
+    def test_builtin_prompts_shown(self):
+        r = self.client.get(reverse('player:settings'))
+        self.assertContains(r, 'Встроенный промпт сверки')
+        self.assertContains(r, 'Сверь анкету с тем, что на самом деле')
+
     def test_address_without_scheme_is_http(self):
         self.post(FakeKeyring())
         self.assertEqual(AppSettings.load().pbx_url, 'http://192.168.3.80')
@@ -870,6 +882,41 @@ class AnalysisTests(TestCase):
         self.assertIn('[00:16] Вы в каком городе проживаете? Минск.', request['contents'])
         self.assertIn('- «Юнистар»; также: Радио Юнистар, Unistar Radio; частоты: Минск 99.5',
                       request['config'].system_instruction)  # station directory
+
+    def test_rules_and_model_from_settings(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={
+            'ai_model': 'gemini-lite', 'ai_rules_analysis': '«Минус» — это Минск.'})
+        item, fake = self.analyse(SUGGESTION)
+        system = fake.calls[0]['config'].system_instruction
+        self.assertTrue(system.endswith('«Минус» — это Минск.\n'))
+        self.assertIn(analysis.RULES_HEADER, system)
+        self.assertEqual((fake.calls[0]['model'], item.model_name), ('gemini-lite', 'gemini-lite'))
+        self.assertEqual(item.prompt_version, analysis.prompt_version(system))
+
+    def test_prompt_version_changes_with_rules(self):
+        plain = self.analyse(SUGGESTION)[0].prompt_version
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_rules_analysis': 'Новое правило.'})
+        ruled = self.analyse(SUGGESTION)[0].prompt_version
+        self.assertEqual(len(plain), 8)
+        self.assertNotEqual(plain, ruled)
+
+    def test_try_on_call_uses_unsaved_rules_and_stores_nothing(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_rules_analysis': 'Сохранённое правило.'})
+        fake = FakeGemini(SUGGESTION)
+        with mock.patch('player.analysis.make_client', return_value=fake):
+            r = self.client.post(reverse('player:ai_try'), {
+                'kind': 'analysis', 'audio': self.audio.pk, 'rules': 'Черновик правила.', 'model': 'gemini-x'})
+        data = r.json()
+        self.assertTrue(data['ok'])
+        self.assertEqual((data['fields']['city'], data['model'], data['tokens']), ('Минск', 'gemini-x', 1000))
+        system = fake.calls[0]['config'].system_instruction
+        self.assertIn('Черновик правила.', system)
+        self.assertNotIn('Сохранённое правило.', system)
+        self.assertFalse(CallAnalysis.objects.exists())
+
+    def test_try_on_call_needs_a_transcribed_call(self):
+        r = self.client.post(reverse('player:ai_try'), {'kind': 'analysis', 'audio': 999999})
+        self.assertFalse(r.json()['ok'])
 
     def test_only_transcript_is_sent(self):
         _, fake = self.analyse(SUGGESTION)
@@ -1577,6 +1624,19 @@ class SurveyCheckRunTests(TestCase):
         with override_settings(GEMINI_COMPARE_MODEL='gemini-strong'):
             item, fake = self.run_check()
         self.assertEqual((fake.calls[0]['model'], item.model_name), ('gemini-strong', 'gemini-strong'))
+
+    def test_try_on_call(self):
+        fake = FakeGemini(self.RESULT)
+        with mock.patch('player.crm.get_client', return_value=self.crm_client), \
+                mock.patch('player.crm.fetch_answers', return_value={'Профиль': {'Возраст': '26'}}), \
+                mock.patch('player.analysis.make_client', return_value=fake):
+            r = self.client.post(reverse('player:ai_try'), {
+                'kind': 'compare', 'audio': self.audio.pk, 'rules': 'Пол не сверять.'})
+        data = r.json()
+        self.assertTrue(data['ok'])
+        self.assertEqual([d['severity'] for d in data['discrepancies']], ['ошибка', 'проверить'])
+        self.assertIn('Пол не сверять.', fake.calls[0]['config'].system_instruction)
+        self.assertFalse(CallComparison.objects.exists())
 
     def test_no_survey_for_the_call(self):
         self.crm_client.find.return_value = []

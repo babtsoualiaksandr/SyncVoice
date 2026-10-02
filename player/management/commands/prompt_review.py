@@ -87,9 +87,11 @@ class Command(BaseCommand):
             raise CommandError('Для --rerun нужен GEMINI_API_KEY в .env')
         if model and not rerun:
             raise CommandError('--model работает только вместе с --rerun')
-        if model:  # this run only: suggestions and the survey check both use it
-            settings.GEMINI_MODEL = model
-            settings.GEMINI_COMPARE_MODEL = model
+        self.model = model  # this run only: suggestions and the survey check both use it
+        self.versions = {
+            'analysis': analysis.prompt_version(analysis.system_prompt()),
+            'compare': analysis.prompt_version(compare.system_prompt()),
+        }
         use_crm = not no_crm and crm.configured()
         crm_client = crm.get_client() if use_crm else None
         gemini = analysis.make_client() if rerun else None
@@ -97,7 +99,9 @@ class Command(BaseCommand):
         lines = [
             f'# Разбор промптов SyncVoice — {timezone.localtime():%d.%m.%Y %H:%M}',
             '',
-            f'Модель: {settings.GEMINI_MODEL}, сверка: {compare.model_name()}. Звонков: {len(calls)}. '
+            f'Модель: {analysis.model(model)}, сверка: {compare.model_name(model)}. '
+            f'Версия промпта: подсказка {self.versions["analysis"]}, сверка {self.versions["compare"]}. '
+            f'Звонков: {len(calls)}. '
             f'{"Gemini опрошен заново с текущими промптами. " if rerun else ""}'
             f'{"" if use_crm else "Анкеты CRM не запрашивались. "}',
             '',
@@ -153,6 +157,8 @@ class Command(BaseCommand):
             totals['calls'] += 1
             totals['city'] += _same(stored.city, review.city)
             totals['stations'] += _same(stored.stations, review.stations)
+        if stored and stored.status == 'done':
+            out += [f'Подсказка ИИ сохранена{self._version(stored, "analysis")}.', '']
         if stored and stored.notes:
             out += [f'Заметка ИИ: {stored.notes}', '']
         if stored and stored.status == 'error':
@@ -164,7 +170,7 @@ class Command(BaseCommand):
 
         if gemini:
             try:
-                fields, usage = _retry(lambda: analysis.suggest_fields(audio, gemini), self.stdout.write)
+                fields, usage = _retry(lambda: analysis.suggest_fields(audio, gemini, model_override=self.model), self.stdout.write)
                 tokens[0] += usage['input_tokens']
                 tokens[1] += usage['output_tokens']
                 out += [
@@ -194,14 +200,16 @@ class Command(BaseCommand):
         out += ['### Сверка анкеты с разговором', '']
         saved = getattr(audio, 'comparison', None)
         if saved and saved.status == 'done':
-            out += self._discrepancies('Сохранённая', saved.summary, saved.discrepancies)
+            out += self._discrepancies(f'Сохранённая{self._version(saved, "compare")}', saved.summary,
+                                       saved.discrepancies)
         elif saved:
             out += [f'Сохранённая: {saved.get_status_display()} {saved.error}'.strip(), '']
         else:
             out += ['Сохранённой сверки нет.', '']
         if gemini and answers:
             try:
-                result, usage = _retry(lambda: compare.check(audio, answers, gemini), self.stdout.write)
+                result, usage = _retry(lambda: compare.check(audio, answers, gemini, model_override=self.model),
+                                       self.stdout.write)
                 tokens[0] += usage['input_tokens']
                 tokens[1] += usage['output_tokens']
                 out += self._discrepancies('Заново (текущий промпт)', result.summary, compare.clean(result))
@@ -211,6 +219,12 @@ class Command(BaseCommand):
 
         out += ['### Расшифровка', '', '```', analysis.transcript_text(audio), '```', '']
         return out
+
+    def _version(self, item, kind):
+        """« (модель, промпт abc123 — текущий)» for a saved AI answer."""
+        version = item.prompt_version or '?'
+        state = 'текущий' if version == self.versions[kind] else 'старый'
+        return f' ({item.model_name or "?"}, промпт {version} — {state})'
 
     @staticmethod
     def _discrepancies(title, summary, items):

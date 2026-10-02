@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from . import analysis, crm
 from .analysis import AnalysisError, RetryLater
-from .models import AudioFile, CallComparison
+from .models import AppSettings, AudioFile, CallComparison
 
 logger = logging.getLogger(__name__)
 
@@ -149,16 +149,20 @@ def find_answers(audio: AudioFile, crm_client=None):
     return survey, crm.fetch_answers(client, survey)
 
 
-def check(audio: AudioFile, answers: dict, gemini_client=None) -> tuple[Comparison, dict]:
-    """Ask Gemini to compare the survey answers with the transcript. Returns (result, usage)."""
+def check(audio: AudioFile, answers: dict, gemini_client=None, rules: str | None = None,
+          model_override: str | None = None) -> tuple[Comparison, dict]:
+    """Ask Gemini to compare the survey answers with the transcript.
+
+    Returns (result, usage); usage also names the model and prompt version.
+    """
     contents = (
         f'Анкета, внесённая оператором:\n{json.dumps(answers, ensure_ascii=False, indent=1)}\n\n'
         f'Расшифровка звонка:\n{analysis.transcript_text(audio)}'
     )
-    return analysis.generate(
-        SYSTEM_PROMPT.format(questionnaire=analysis.QUESTIONNAIRE), contents, Comparison, gemini_client,
-        model=model_name(),
-    )
+    system = system_prompt(rules)
+    name = model_name(model_override)
+    result, usage = analysis.generate(system, contents, Comparison, gemini_client, model=name)
+    return result, {**usage, 'model': name, 'prompt_version': analysis.prompt_version(system)}
 
 
 def _same(a: str, b: str) -> bool:
@@ -192,8 +196,16 @@ def clean(result: Comparison) -> list[dict]:
     ]
 
 
-def model_name() -> str:
-    return settings.GEMINI_COMPARE_MODEL or settings.GEMINI_MODEL
+def model_name(override: str | None = None) -> str:
+    """Model for the survey check: override, the settings page, .env, then the suggestions' model."""
+    return (override or AppSettings.load().ai_compare_model.strip() or settings.GEMINI_COMPARE_MODEL
+            or analysis.model())
+
+
+def system_prompt(rules: str | None = None) -> str:
+    """The survey-check prompt; `rules` None — the controllers' rules saved in the settings."""
+    base = SYSTEM_PROMPT.format(questionnaire=analysis.QUESTIONNAIRE)
+    return analysis.with_rules(base, AppSettings.load().ai_rules_compare if rules is None else rules)
 
 
 def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) -> None:
@@ -217,7 +229,8 @@ def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) ->
     item.survey_id = survey.id
     item.discrepancies = clean(result)
     item.summary = result.summary.strip()
-    item.model_name = model_name()
+    item.model_name = usage['model']
+    item.prompt_version = usage['prompt_version']
     item.input_tokens = usage['input_tokens']
     item.output_tokens = usage['output_tokens']
     item.status = CallComparison.Status.DONE
