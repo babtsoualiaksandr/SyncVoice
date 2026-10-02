@@ -1777,3 +1777,20 @@ class AnalyzeCallsCommandTests(TestCase):
         AppSettings.objects.filter(pk=1).update(crm_url='')
         with self.assertRaises(CommandError):
             self.run_command('--compare')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class StatusAiQueueTests(TestCase):
+    def test_ai_queue_and_reason(self):
+        a = make_call(CALL_A, status=AudioFile.Status.DONE)
+        b = make_call(CALL_B, status=AudioFile.Status.DONE)
+        CallAnalysis.objects.create(audio=a, status=CallAnalysis.Status.PENDING)
+        CallAnalysis.objects.create(audio=b, status=CallAnalysis.Status.DONE)
+        CallComparison.objects.create(audio=a, status=CallComparison.Status.PENDING, error='CRM: нет связи')
+        CallComparison.objects.create(audio=b, status=CallComparison.Status.PENDING)
+        ai = self.client.get(reverse('player:status')).json()['ai']
+        self.assertEqual(ai, {'analysis': 1, 'compare': 2, 'waiting': 'CRM: нет связи'})
+
+    def test_empty_queue(self):
+        ai = self.client.get(reverse('player:status')).json()['ai']
+        self.assertEqual(ai, {'analysis': 0, 'compare': 0, 'waiting': ''})

@@ -178,7 +178,20 @@ def status(request):
         'queue': AudioFile.objects.filter(
             status__in=[AudioFile.Status.PENDING, AudioFile.Status.PROCESSING]
         ).count(),
+        'ai': _ai_queue(),
     })
+
+
+def _ai_queue():
+    """Gemini jobs still to do and, if they wait (overloaded model, CRM down), why."""
+    waiting = [
+        model.objects.filter(status=model.Status.PENDING) for model in (CallAnalysis, CallComparison)
+    ]
+    reason = next((
+        item.error for qs in waiting
+        for item in qs.exclude(error='').order_by('-updated_at')[:1]
+    ), '')
+    return {'analysis': waiting[0].count(), 'compare': waiting[1].count(), 'waiting': reason}
 
 
 def _keep_password(form, old_username, user_field, password_field, service):

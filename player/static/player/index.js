@@ -26,6 +26,13 @@
       }
     }
     if (data.queue) parts.push(`в очереди на распознавание: ${data.queue}`);
+    const ai = data.ai;
+    if (ai && (ai.analysis || ai.compare)) {
+      const jobs = [];
+      if (ai.analysis) jobs.push(`подсказки ${ai.analysis}`);
+      if (ai.compare) jobs.push(`сверки ${ai.compare}`);
+      parts.push(`ИИ в очереди: ${jobs.join(', ')}` + (ai.waiting ? ` (ждёт: ${ai.waiting})` : ''));
+    }
     return parts.join(' · ');
   }
 
