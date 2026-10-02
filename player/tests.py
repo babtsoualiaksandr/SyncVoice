@@ -1724,3 +1724,24 @@ class PromptReviewTests(TestCase):
         from django.core.management.base import CommandError
         with self.assertRaises(CommandError):
             self.run_command('--ids', 'abc')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class ExportAiTests(TestCase):
+    def test_saved_answers_without_phone(self):
+        from django.core.management import call_command
+        audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=audio, index=0, start=21, end=24, text='В Минске.')
+        CallAnalysis.objects.create(audio=audio, status=CallAnalysis.Status.DONE, city='Минск', stations='Русское')
+        CallComparison.objects.create(audio=audio, status=CallComparison.Status.DONE, summary='Расхождений нет.',
+                                      discrepancies=[])
+        out = Path(MEDIA_ROOT) / 'export' / 'test.json'
+        call_command('export_ai', '--day', '2026-09-25', '--out', str(out), stdout=io.StringIO())
+        text = out.read_text(encoding='utf-8')
+        self.assertNotIn(audio.phone, text)
+        call = json.loads(text)['calls'][0]
+        self.assertEqual((call['time'], call['extension']), ('2026-09-25 09:32:15', '308'))
+        self.assertEqual(call['analysis']['city'], 'Минск')
+        self.assertEqual(call['comparison']['summary'], 'Расхождений нет.')
+        self.assertEqual(call['transcript'], '[00:21] В Минске.')
+        self.assertEqual(len(call['phone_hash']), 10)
