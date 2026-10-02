@@ -1789,11 +1789,11 @@ class StatusAiQueueTests(TestCase):
         CallComparison.objects.create(audio=a, status=CallComparison.Status.PENDING, error='CRM: нет связи')
         CallComparison.objects.create(audio=b, status=CallComparison.Status.PENDING)
         ai = self.client.get(reverse('player:status')).json()['ai']
-        self.assertEqual(ai, {'analysis': 1, 'compare': 2, 'waiting': 'CRM: нет связи'})
+        self.assertEqual(ai, {'analysis': 1, 'compare': 2, 'waiting': 'CRM: нет связи', 'exhausted': []})
 
     def test_empty_queue(self):
         ai = self.client.get(reverse('player:status')).json()['ai']
-        self.assertEqual(ai, {'analysis': 0, 'compare': 0, 'waiting': ''})
+        self.assertEqual(ai, {'analysis': 0, 'compare': 0, 'waiting': '', 'exhausted': []})
 
 
 @override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key')
@@ -1875,3 +1875,87 @@ class ReportWithAiTests(TestCase):
         call_command('report_with_ai', str(src), stdout=out)
         self.assertTrue((Path(MEDIA_ROOT) / 'export' / 'Отчет записи 25.09.2026 + ИИ.xlsx').exists())
         self.assertIn('Радиостанции: ИИ совпал с контролёром: 2 из 2', out.getvalue())
+
+
+DAILY_LIMIT = {'error': {
+    'code': 429, 'status': 'RESOURCE_EXHAUSTED', 'message': 'You exceeded your current quota.',
+    'details': [{'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': [
+        {'quotaId': 'GenerateRequestsPerDayPerProjectPerModel-FreeTier'}]}],
+}}
+
+
+class PerModelGemini(FakeGemini):
+    """Answers for some models, runs out of the daily limit for others."""
+
+    def __init__(self, result, spent=()):
+        super().__init__(result)
+        self.spent = set(spent)
+
+    def generate_content(self, **kwargs):
+        if kwargs['model'] in self.spent:
+            self.calls.append(kwargs)
+            raise genai_errors.ClientError(429, DAILY_LIMIT)
+        return super().generate_content(**kwargs)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-main')
+class ModelFallbackTests(TestCase):
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_fallback_models': 'gemini-spare, gemini-last'})
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=self.audio, index=0, start=16, end=18, text='Минск.')
+
+    def analyse(self, fake):
+        analysis.queue(self.audio)
+        item = self.audio.analysis
+        analysis.run_analysis(item, client=fake)
+        item.refresh_from_db()
+        return item
+
+    def test_daily_limit_switches_to_the_next_model_and_remembers(self):
+        fake = PerModelGemini(SUGGESTION, spent={'gemini-main'})
+        item = self.analyse(fake)
+        self.assertEqual((item.status, item.model_name), (CallAnalysis.Status.DONE, 'gemini-spare'))
+        self.assertIn('gemini-main', analysis.exhausted_models())
+        fake.calls.clear()
+        self.analyse(fake)  # the spent model is not asked again until the reset
+        self.assertEqual([c['model'] for c in fake.calls], ['gemini-spare'])
+
+    def test_all_spent_waits_in_the_queue(self):
+        fake = PerModelGemini(SUGGESTION, spent={'gemini-main', 'gemini-spare', 'gemini-last'})
+        with self.assertRaisesMessage(analysis.RetryLater, 'Дневной лимит Gemini исчерпан'):
+            self.analyse(fake)
+        self.assertEqual(self.audio.analysis.status, CallAnalysis.Status.PENDING)
+        self.assertEqual(len(analysis.exhausted_models()), 3)
+
+    def test_minute_limit_does_not_switch(self):
+        fake = FakeGemini(genai_errors.ClientError(429, {'error': {'code': 429, 'message': 'Resource exhausted'}}))
+        with self.assertRaises(analysis.RetryLater):
+            self.analyse(fake)
+        self.assertEqual(len(fake.calls), 1)
+        self.assertFalse(analysis.exhausted_models())
+
+    def test_spent_model_comes_back_after_reset(self):
+        from .models import GeminiQuota
+        GeminiQuota.objects.create(model='gemini-main', exhausted_until=timezone.now() - timezone.timedelta(minutes=1))
+        fake = PerModelGemini(SUGGESTION)
+        self.assertEqual(self.analyse(fake).model_name, 'gemini-main')
+
+    def test_compare_uses_the_chain_too(self):
+        fake = PerModelGemini(compare_module.Comparison(review='', discrepancies=[], summary='ok'),
+                              spent={'gemini-main'})
+        _, usage = compare_module.check(self.audio, {}, fake)
+        self.assertEqual(usage['model'], 'gemini-spare')
+
+    def test_quota_reset_is_next_pacific_midnight(self):
+        reset = analysis.quota_reset(timezone.make_aware(datetime(2026, 10, 3, 12, 0)))
+        # 12:00 Minsk = 02:00 Pacific (PDT) on 03.10 -> reset at 04.10 00:00 PDT = 10:00 Minsk
+        self.assertEqual(timezone.localtime(reset).strftime('%d.%m %H:%M'), '04.10 10:00')
+
+    def test_settings_field_and_status(self):
+        r = self.client.get(reverse('player:settings'))
+        self.assertContains(r, 'gemini-spare, gemini-last')
+        analysis.mark_exhausted('gemini-main')
+        self.assertContains(self.client.get(reverse('player:settings')), 'Дневной лимит исчерпан')
+        ai = self.client.get(reverse('player:status')).json()['ai']
+        self.assertEqual(ai['exhausted'][0]['model'], 'gemini-main')

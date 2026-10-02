@@ -82,6 +82,12 @@
       {% endif %}
       {% with field=form.ai_model %}{% include 'player/_field.html' %}{% endwith %}
       {% with field=form.ai_compare_model %}{% include 'player/_field.html' %}{% endwith %}
+      {% with field=form.ai_fallback_models %}{% include 'player/_field.html' %}{% endwith %}
+      {% if exhausted_models %}
+        <p class="warn-text">Дневной лимит исчерпан:
+          {% for name, until in exhausted_models.items %}{{ name }} — до {{ until|date:"d.m H:i" }}{% if not forloop.last %}; {% endif %}{% endfor %}.
+        </p>
+      {% endif %}
 
       <div class="field">
         <label for="ai-try-call">Звонок для проверки правил</label>

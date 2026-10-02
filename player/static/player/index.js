@@ -33,6 +33,10 @@
       if (ai.compare) jobs.push(`сверки ${ai.compare}`);
       parts.push(`ИИ в очереди: ${jobs.join(', ')}` + (ai.waiting ? ` (ждёт: ${ai.waiting})` : ''));
     }
+    if (ai && ai.exhausted && ai.exhausted.length) {
+      parts.push('Дневной лимит Gemini исчерпан: '
+                 + ai.exhausted.map((q) => `${q.model} до ${q.until}`).join(', '));
+    }
     return parts.join(' · ');
   }
 

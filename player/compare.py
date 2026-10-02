@@ -172,8 +172,9 @@ def check(audio: AudioFile, answers: dict, gemini_client=None, rules: str | None
         f'Расшифровка звонка:\n{analysis.transcript_text(audio)}'
     )
     system = system_prompt(rules)
-    name = model_name(model_override)
-    result, usage = analysis.generate(system, contents, Comparison, gemini_client, model=name)
+    result, usage, name = analysis.generate_any(
+        system, contents, Comparison, gemini_client, analysis.model_chain(model_name(), model_override),
+    )
     return result, {**usage, 'model': name, 'prompt_version': analysis.prompt_version(system)}
 
 

@@ -118,7 +118,7 @@ class SettingsForm(forms.ModelForm):
         model = AppSettings
         fields = ['pbx_url', 'pbx_username', 'pbx_password', 'pbx_verify_ssl', 'controller', 'min_duration',
                   'max_duration', 'crm_url', 'crm_username', 'crm_password', 'survey_url',
-                  'ai_model', 'ai_compare_model', 'ai_rules_analysis', 'ai_rules_compare']
+                  'ai_model', 'ai_compare_model', 'ai_fallback_models', 'ai_rules_analysis', 'ai_rules_compare']
         widgets = {
             'ai_rules_analysis': forms.Textarea(attrs={'rows': 5}),
             'ai_rules_compare': forms.Textarea(attrs={'rows': 5}),
@@ -140,6 +140,10 @@ class SettingsForm(forms.ModelForm):
 
     def clean_ai_compare_model(self):
         return self.cleaned_data['ai_compare_model'].strip()
+
+    def clean_ai_fallback_models(self):
+        names = self.cleaned_data['ai_fallback_models'].replace('\n', ',').split(',')
+        return ', '.join(dict.fromkeys(n.strip() for n in names if n.strip()))
 
     def clean_survey_url(self):
         url = self.cleaned_data['survey_url'].strip()

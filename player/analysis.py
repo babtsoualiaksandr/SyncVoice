@@ -6,14 +6,16 @@ listening, the review form stays editable.
 """
 import hashlib
 import logging
+from datetime import datetime, time, timedelta, timezone as dt_timezone
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from django.conf import settings
+from django.utils import timezone
 from pydantic import BaseModel, Field
 
 from . import stations as station_directory
-from .models import AppSettings, AudioFile, CallAnalysis
+from .models import AppSettings, AudioFile, CallAnalysis, GeminiQuota
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,10 @@ class RetryLater(Exception):
     """Temporary failure (rate limit, server/network error): keep it queued."""
 
 
+class DailyLimit(RetryLater):
+    """The model's free daily request limit ran out: another model may still answer."""
+
+
 RULES_HEADER = ('Дополнительные правила контролёров. Если они расходятся с общими правилами выше — '
                 'следуй им:')
 
@@ -112,6 +118,68 @@ def enabled() -> bool:
 def model(override: str | None = None) -> str:
     """Model for the field suggestions: this run's override, the settings page, then .env."""
     return override or AppSettings.load().ai_model.strip() or settings.GEMINI_MODEL
+
+
+def fallback_models() -> list[str]:
+    """Spare models from the settings page, in order."""
+    text = AppSettings.load().ai_fallback_models.replace('\n', ',')
+    return [name.strip() for name in text.split(',') if name.strip()]
+
+
+def model_chain(main: str, override: str | None = None) -> list[str]:
+    """Models to try in turn: an explicit override alone, else the main model and the spare ones."""
+    if override:
+        return [override]
+    return list(dict.fromkeys([main, *fallback_models()]))
+
+
+def quota_reset(now: datetime | None = None) -> datetime:
+    """When Gemini's daily limits reset: the next midnight Pacific time."""
+    now = now or timezone.now()
+    try:
+        from zoneinfo import ZoneInfo
+        pacific = ZoneInfo('America/Los_Angeles')
+    except Exception:  # no time zone data: Pacific standard time is close enough
+        pacific = dt_timezone(timedelta(hours=-8))
+    local = now.astimezone(pacific)
+    return datetime.combine(local.date() + timedelta(days=1), time(0), pacific)
+
+
+def exhausted_models() -> dict[str, datetime]:
+    """Models with a spent daily limit and when they come back."""
+    return dict(GeminiQuota.objects.filter(exhausted_until__gt=timezone.now())
+                .order_by('exhausted_until').values_list('model', 'exhausted_until'))
+
+
+def mark_exhausted(name: str) -> datetime:
+    until = quota_reset()
+    GeminiQuota.objects.update_or_create(model=name, defaults={'exhausted_until': until})
+    logger.warning('Gemini %s: daily limit reached, skipped until %s', name, until)
+    return until
+
+
+def generate_any(system: str, contents: str, schema, client, models: list[str]):
+    """generate() with the first model that still has its daily limit. Returns (parsed, usage, model).
+
+    A model that answers «daily limit reached» is skipped until the quota resets
+    and the next one is asked at once; with all of them spent the call waits (RetryLater).
+    A single explicitly chosen model is always asked.
+    """
+    spent = exhausted_models() if len(models) > 1 else {}
+    for name in models:
+        if name in spent:
+            continue
+        try:
+            parsed, usage = generate(system, contents, schema, client, model=name)
+        except DailyLimit:
+            spent[name] = mark_exhausted(name)
+            continue
+        return parsed, usage, name
+    back = min(spent.values())
+    raise RetryLater(
+        f'Дневной лимит Gemini исчерпан: {", ".join(models)}. '
+        f'Продолжу с {timezone.localtime(back):%d.%m %H:%M} или добавьте запасную модель в настройках.'
+    )
 
 
 def with_rules(prompt: str, rules: str) -> str:
@@ -165,6 +233,11 @@ def transcript_text(audio: AudioFile) -> str:
     )
 
 
+def is_daily_limit(exc) -> bool:
+    """429 because of the per-day quota (quotaId «…PerDay…»), not the per-minute one."""
+    return 'perday' in f'{exc.message} {exc.details}'.casefold().replace('_', '').replace(' ', '')
+
+
 def generate(system: str, contents: str, schema, client=None, model: str | None = None):
     """One structured Gemini request. Returns (parsed schema object, usage).
 
@@ -187,6 +260,8 @@ def generate(system: str, contents: str, schema, client=None, model: str | None 
         )
     except errors.ClientError as exc:
         if exc.code == 429:
+            if is_daily_limit(exc):
+                raise DailyLimit(f'Дневной лимит Gemini для {model or settings.GEMINI_MODEL} исчерпан: {exc.message}')
             raise RetryLater(f'Превышен лимит запросов Gemini: {exc.message}')
         raise AnalysisError(f'Gemini отклонил запрос ({exc.code}): {exc.message}')
     except errors.ServerError as exc:
@@ -213,9 +288,9 @@ def suggest_fields(audio: AudioFile, client=None, rules: str | None = None,
                    model_override: str | None = None) -> tuple[SuggestedFields, dict]:
     """Ask Gemini for the report fields. Returns (fields, usage); usage also names the model and prompt version."""
     system = system_prompt(rules)
-    name = model(model_override)
-    fields, usage = generate(
-        system, f'Расшифровка звонка:\n\n{transcript_text(audio)}', SuggestedFields, client, model=name,
+    fields, usage, name = generate_any(
+        system, f'Расшифровка звонка:\n\n{transcript_text(audio)}', SuggestedFields, client,
+        model_chain(model(), model_override),
     )
     return fields, {**usage, 'model': name, 'prompt_version': prompt_version(system)}
 

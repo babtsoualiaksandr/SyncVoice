@@ -193,7 +193,12 @@ def _ai_queue():
         item.error for qs in waiting
         for item in qs.exclude(error='').order_by('-updated_at')[:1]
     ), '')
-    return {'analysis': waiting[0].count(), 'compare': waiting[1].count(), 'waiting': reason}
+    exhausted = [
+        {'model': name, 'until': timezone.localtime(until).strftime('%d.%m %H:%M')}
+        for name, until in analysis.exhausted_models().items()
+    ]
+    return {'analysis': waiting[0].count(), 'compare': waiting[1].count(), 'waiting': reason,
+            'exhausted': exhausted}
 
 
 def _keep_password(form, old_username, user_field, password_field, service):
@@ -238,6 +243,7 @@ def settings_view(request):
         'survey_example': example.survey_url() if example else None,
         'ai_enabled': analysis.enabled(),
         'compare_enabled': compare.enabled(),
+        'exhausted_models': analysis.exhausted_models(),
         'builtin_analysis_prompt': analysis.system_prompt(rules=''),
         'builtin_compare_prompt': compare.system_prompt(rules=''),
         'try_calls': AudioFile.objects.filter(status=AudioFile.Status.DONE)

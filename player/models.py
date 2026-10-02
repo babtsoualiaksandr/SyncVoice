@@ -91,6 +91,12 @@ class AppSettings(models.Model):
         help_text='Например: «Ответ "где-то половина" — граница, оператор должен уточнить». '
                   'Добавляются к встроенному промпту и важнее его общих правил.',
     )
+    ai_fallback_models = models.CharField(
+        'запасные модели', max_length=300, blank=True,
+        help_text='Через запятую, по порядку, например: gemini-3.5-flash-lite, gemini-2.5-flash-lite. '
+                  'Когда у модели кончается дневной лимит бесплатного тарифа, SyncVoice переходит '
+                  'на следующую до сброса лимита (полночь по Калифорнии — 10–11 утра по Минску).',
+    )
     worker_seen_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
@@ -126,6 +132,19 @@ class Interviewer(models.Model):
 
     def __str__(self):
         return f'{self.name} {self.extension}'  # format used in the report: «Марина 308»
+
+
+class GeminiQuota(models.Model):
+    """A Gemini model whose free daily limit ran out: skipped until the quota resets."""
+    model = models.CharField('модель', max_length=64, unique=True)
+    exhausted_until = models.DateTimeField('лимит исчерпан до')
+
+    class Meta:
+        verbose_name = 'дневной лимит Gemini'
+        verbose_name_plural = 'дневные лимиты Gemini'
+
+    def __str__(self):
+        return f'{self.model} до {self.exhausted_until:%d.%m %H:%M}'
 
 
 class PbxSync(models.Model):
