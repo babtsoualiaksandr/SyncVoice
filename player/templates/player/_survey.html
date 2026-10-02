@@ -3,6 +3,7 @@
   <div class="pane-head">
     <h2>Анкета оператора</h2>
     <span class="pane-tools">
+      <span class="pane-zoom" data-zoom-pane="survey"></span>
       <a class="btn btn-small" href="{{ survey_url }}" target="_blank" rel="noopener noreferrer"
          title="{{ survey_url }}" aria-label="Адрес анкеты: {{ survey_url }}">🔗</a>
       <button class="btn btn-small" type="button" id="survey-reload" title="Обновить страницу анкеты">↻</button>
@@ -31,6 +32,8 @@
     <button class="btn btn-primary" type="button" id="survey-blocked-open">Открыть анкету в окне рядом</button>
   </div>
 
-  <iframe class="survey-frame" id="survey-frame" title="Анкета оператора"
-          referrerpolicy="no-referrer"></iframe>
+  <div class="survey-frame-box" id="survey-frame-box">
+    <iframe class="survey-frame" id="survey-frame" title="Анкета оператора"
+            referrerpolicy="no-referrer"></iframe>
+  </div>
 </section>

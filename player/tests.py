@@ -1586,3 +1586,39 @@ class SurveyCheckRunTests(TestCase):
                 mock.patch('player.worker.run_analysis_step', return_value=False):
             worker.run_once()
         self.assertEqual(pending.comparison.status, CallComparison.Status.PENDING)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class PromptReviewTests(TestCase):
+    def setUp(self):
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=self.audio, index=0, start=21, end=24, text='В каком городе проживаете? В Минске.')
+        CallAnalysis.objects.create(audio=self.audio, status=CallAnalysis.Status.DONE, city='Минск',
+                                    stations='юнистар,Русское', notes='Слушала вчера.')
+        CallReview.objects.create(audio=self.audio, city='Минск', stations='Русское, Юнистар',
+                                  completed=True, error_comment='респ. 26 неполных лет')
+        make_call(CALL_B, status=AudioFile.Status.DONE)  # not reviewed: left out by default
+        self.out = Path(MEDIA_ROOT) / 'prompt_review' / 'test.md'
+
+    def run_command(self, *args):
+        from django.core.management import call_command
+        call_command('prompt_review', '--no-crm', '--out', str(self.out), *args, stdout=io.StringIO())
+        return self.out.read_text(encoding='utf-8')
+
+    def test_reviewed_calls_side_by_side(self):
+        text = self.run_command()
+        self.assertIn(f'## Звонок #{self.audio.pk}', text)
+        self.assertNotIn('## Звонок #', text.split(f'## Звонок #{self.audio.pk}')[1])  # only one call
+        self.assertIn('| Радиостанции | Русское, Юнистар | юнистар,Русское | ✓ |', text)
+        self.assertIn('город 1, радиостанции 1', text)
+        self.assertIn('> респ. 26 неполных лет', text)
+        self.assertIn('[00:21] В каком городе проживаете? В Минске.', text)
+        self.assertNotIn('375290000103', text)  # no phone numbers in the file
+
+    def test_all_includes_unreviewed(self):
+        self.assertEqual(self.run_command('--all').count('## Звонок #'), 2)
+
+    def test_bad_ids(self):
+        from django.core.management.base import CommandError
+        with self.assertRaises(CommandError):
+            self.run_command('--ids', 'abc')

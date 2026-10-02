@@ -20,7 +20,8 @@
   function save() {
     try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
   }
-  const state = Object.assign({ widths: {}, collapsed: {}, tab: 'survey' }, load());
+  const state = Object.assign({ widths: {}, collapsed: {}, zoom: {}, tab: 'survey' }, load());
+  state.zoom = state.zoom || {};
 
   // ---------- widths & collapsing ----------
 
@@ -98,6 +99,49 @@
     });
   }
 
+  // ---------- per-pane zoom (A− 100% A+) ----------
+
+  const ZOOM_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.35, 1.5, 1.75, 2];
+
+  for (const slot of container.querySelectorAll('[data-zoom-pane]')) {
+    const name = slot.dataset.zoomPane;
+    const pane = byName[name];
+    if (!pane) continue;
+    const button = (text, title) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.title = title;
+      return b;
+    };
+    const what = `панель «${pane.dataset.title}»`;
+    const minus = button('A−', `Мельче: ${what}`);
+    const value = button('', 'Вернуть 100%');
+    value.className = 'pane-zoom-value';
+    const plus = button('A+', `Крупнее: ${what}`);
+    slot.append(minus, value, plus);
+
+    const show = () => {
+      const zoom = state.zoom[name] || 1;
+      pane.style.setProperty('--pane-zoom', zoom);
+      value.textContent = `${Math.round(zoom * 100)}%`;
+      minus.disabled = zoom <= ZOOM_STEPS[0];
+      plus.disabled = zoom >= ZOOM_STEPS.at(-1);
+    };
+    const step = (dir) => {
+      const zoom = state.zoom[name] || 1;
+      const next = dir > 0 ? ZOOM_STEPS.find((z) => z > zoom + 0.001) : ZOOM_STEPS.findLast((z) => z < zoom - 0.001);
+      if (next === undefined) return;
+      state.zoom[name] = next;
+      save();
+      show();
+    };
+    minus.addEventListener('click', () => step(-1));
+    plus.addEventListener('click', () => step(1));
+    value.addEventListener('click', () => { delete state.zoom[name]; save(); show(); });
+    show();
+  }
+
   // ---------- survey + review as tabs on medium screens ----------
 
   // The same tab bar sits at the top of both panes; only the active pane shows.
@@ -164,6 +208,7 @@
   let url = surveyBox.dataset.url; // shown in the panel
   let windowUrl = url; // opened by «Окно рядом» (the CRM itself, under the controller's own login)
   const frame = document.getElementById('survey-frame');
+  const frameBox = document.getElementById('survey-frame-box');
   const blocked = document.getElementById('survey-blocked');
   const blockedReason = document.getElementById('survey-blocked-reason');
   const preferWindow = document.getElementById('survey-prefer-window');
@@ -197,7 +242,7 @@
   }
 
   function showBlocked(reason) {
-    frame.hidden = true;
+    frameBox.hidden = true;
     frame.removeAttribute('src');
     blockedReason.textContent = reason;
     blocked.hidden = false;
@@ -205,7 +250,7 @@
 
   function showFrame() {
     blocked.hidden = true;
-    frame.hidden = false;
+    frameBox.hidden = false;
     frame.src = url;
   }
 
@@ -290,7 +335,7 @@
   }
 
   document.getElementById('survey-reload').addEventListener('click', () => {
-    if (!frame.hidden) frame.src = url;
+    if (!frameBox.hidden) frame.src = url;
   });
   document.getElementById('survey-window').addEventListener('click', () => openWindow());
   document.getElementById('survey-blocked-open').addEventListener('click', () => openWindow());

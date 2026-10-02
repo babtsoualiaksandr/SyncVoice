@@ -97,6 +97,38 @@ def _fail(item: CallComparison, message: str) -> None:
     item.save()
 
 
+def find_answers(audio: AudioFile, crm_client=None):
+    """The CRM survey of this call and its answers as sent to Gemini (no personal data).
+
+    Returns (None, None) when the CRM has no survey for the call; raises crm.CrmError.
+    """
+    client = crm_client or crm.get_client()
+    surveys = client.find(audio.phone)
+    call_time = timezone.localtime(audio.call_started_at).replace(tzinfo=None) if audio.call_started_at else None
+    survey = crm.pick_survey(surveys, call_time)
+    if not survey:
+        return None, None
+    return survey, crm.fetch_answers(client, survey)
+
+
+def check(audio: AudioFile, answers: dict, gemini_client=None) -> tuple[Comparison, dict]:
+    """Ask Gemini to compare the survey answers with the transcript. Returns (result, usage)."""
+    contents = (
+        f'Анкета, внесённая оператором:\n{json.dumps(answers, ensure_ascii=False, indent=1)}\n\n'
+        f'Расшифровка звонка:\n{analysis.transcript_text(audio)}'
+    )
+    return analysis.generate(
+        SYSTEM_PROMPT.format(questionnaire=analysis.QUESTIONNAIRE), contents, Comparison, gemini_client,
+    )
+
+
+def clean(result: Comparison) -> list[dict]:
+    return [
+        {**d.model_dump(), 'severity': d.severity if d.severity in SEVERITIES else 'проверить'}
+        for d in result.discrepancies
+    ]
+
+
 def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) -> None:
     """Fill `item`. Raises RetryLater to keep it queued (Gemini or CRM temporarily unavailable)."""
     audio = item.audio
@@ -105,32 +137,18 @@ def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) ->
     if not audio.phone:
         return _fail(item, 'У звонка нет телефона — анкету не найти.')
     try:
-        client = crm_client or crm.get_client()
-        surveys = client.find(audio.phone)
-        call_time = timezone.localtime(audio.call_started_at).replace(tzinfo=None) if audio.call_started_at else None
-        survey = crm.pick_survey(surveys, call_time)
-        if not survey:
-            return _fail(item, 'Анкета этого звонка в CRM не найдена.')
-        answers = crm.fetch_answers(client, survey)
+        survey, answers = find_answers(audio, crm_client)
     except crm.CrmError as exc:
         raise RetryLater(f'CRM: {exc}')
-
-    contents = (
-        f'Анкета, внесённая оператором:\n{json.dumps(answers, ensure_ascii=False, indent=1)}\n\n'
-        f'Расшифровка звонка:\n{analysis.transcript_text(audio)}'
-    )
+    if not survey:
+        return _fail(item, 'Анкета этого звонка в CRM не найдена.')
     try:
-        result, usage = analysis.generate(
-            SYSTEM_PROMPT.format(questionnaire=analysis.QUESTIONNAIRE), contents, Comparison, gemini_client,
-        )
+        result, usage = check(audio, answers, gemini_client)
     except AnalysisError as exc:
         return _fail(item, str(exc))
 
     item.survey_id = survey.id
-    item.discrepancies = [
-        {**d.model_dump(), 'severity': d.severity if d.severity in SEVERITIES else 'проверить'}
-        for d in result.discrepancies
-    ]
+    item.discrepancies = clean(result)
     item.summary = result.summary.strip()
     item.model_name = settings.GEMINI_MODEL
     item.input_tokens = usage['input_tokens']

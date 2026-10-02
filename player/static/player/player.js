@@ -178,7 +178,9 @@
     const box = els.transcript;
     // Measure on screen rather than via offsetTop, which depends on the
     // offsetParent: put the line a third of the way down the box.
-    const offset = row.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    // Divide by the pane's zoom (A−/A+): screen pixels vs. the box's own.
+    const zoom = box.currentCSSZoom || 1;
+    const offset = (row.getBoundingClientRect().top - box.getBoundingClientRect().top) / zoom;
     const top = box.scrollTop + offset - box.clientHeight / 3;
     programmaticScrollUntil = Date.now() + 1000; // our smooth scroll isn't the user's
     box.scrollTo({ top, behavior: 'smooth' });

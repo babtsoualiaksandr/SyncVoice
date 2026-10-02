@@ -341,7 +341,10 @@ table.calls tr.is-reviewed a { color: var(--muted); }
   .review { position: static; max-height: none; }
 }
 
-.review-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.review-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.review-head h2 { margin-right: auto; }
+.pane .review-head { padding-right: 28px; }
+.save-state { white-space: nowrap; }
 .save-state { font-size: 0.85rem; color: var(--muted); }
 
 .field { display: grid; gap: 4px; margin-bottom: 12px; min-width: 0; }
@@ -485,7 +488,30 @@ table.stations .errorlist { font-size: 0.8rem; }
 .survey .pane-head h2 { margin: 0; flex: 1; }
 .pane-tools { display: flex; gap: 6px; }
 .survey-url { display: block; margin: 4px 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.survey-frame { flex: 1; width: 100%; min-height: 300px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+/* The CRM page is scaled as a picture (it's another site — our CSS can't reach its fonts):
+   the frame is made 1/zoom times larger and shrunk or enlarged back into the box. */
+.survey-frame-box {
+  flex: 1; position: relative; min-height: 300px; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 8px; background: #fff;
+}
+.survey-frame {
+  position: absolute; top: 0; left: 0; border: 0;
+  width: calc(100% / var(--pane-zoom, 1)); height: calc(100% / var(--pane-zoom, 1));
+  transform: scale(var(--pane-zoom, 1)); transform-origin: 0 0;
+}
+/* Player and review: everything inside scales, layout included. */
+.pane[data-pane="main"] > .card, .pane[data-pane="review"] > .card { zoom: var(--pane-zoom, 1); }
+
+.pane-zoom { display: inline-flex; align-items: center; }
+.pane-zoom button {
+  font: inherit; font-size: 0.8rem; line-height: 1.3; padding: 2px 7px; cursor: pointer;
+  color: var(--muted); background: var(--surface); border: 1px solid var(--border);
+}
+.pane-zoom button:first-child { border-radius: 6px 0 0 6px; }
+.pane-zoom button:last-child { border-radius: 0 6px 6px 0; }
+.pane-zoom .pane-zoom-value { margin: 0 -1px; min-width: 3.4em; font-variant-numeric: tabular-nums; }
+.pane-zoom button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); position: relative; }
+.pane-zoom button:disabled { opacity: 0.4; cursor: default; }
 .survey-blocked p { margin: 0 0 8px; }
 .survey-hint { margin: 6px 0 0; }
 .survey-pref { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
@@ -503,7 +529,7 @@ table.stations .errorlist { font-size: 0.8rem; }
   .pane.collapsed > :not(.pane-label) { display: revert; }
   .pane.collapsed > .pane-label { display: none; }
   .survey { height: auto; }
-  .survey-frame { flex: none; height: 70vh; }
+  .survey-frame-box { flex: none; height: 70vh; }
 }
 
 /* ---------- compact call header ---------- */

@@ -5,6 +5,7 @@
     {% csrf_token %}
     <div class="review-head">
       <h2 id="review-title">Контроль</h2>
+      <span class="pane-zoom" data-zoom-pane="review"></span>
       <span class="save-state" id="save-state" role="status">
         {% if review.completed %}Проверен{% elif review %}Черновик сохранён{% endif %}
       </span>
