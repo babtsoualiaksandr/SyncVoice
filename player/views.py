@@ -22,8 +22,8 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .audio_utils import wav_duration
 from .credentials import CRM_SERVICE, SERVICE as PBX_SERVICE, get_password, set_password, store_name
-from .forms import AudioUploadForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
-from . import analysis, compare, crm, stats
+from .forms import AudioUploadForm, ControllerReportForm, ReviewForm, SettingsForm, StationFormSet, StationImportForm
+from . import ai_report, analysis, compare, crm, stats
 from . import stations as station_directory
 from .models import CITIES as STATION_CITIES, AppSettings, AudioFile, CallAnalysis, CallComparison, CallReview, Interviewer, PbxSync, RadioStation, parse_call_name
 from .pbx import PbxError
@@ -94,6 +94,8 @@ def index(request, upload_form=None):
         'day_total': day_total,
         'other_audio': AudioFile.objects.filter(call_started_at=None),
         'upload_form': upload_form or AudioUploadForm(),
+        'report_form': ControllerReportForm(),
+        'ai_enabled': analysis.enabled(),
         'sync_day': timezone.localdate() - timedelta(days=1),
         'last_sync': PbxSync.objects.first(),
         'settings': settings,
@@ -432,6 +434,29 @@ def review_save(request, pk):
         'next_url': next_unreviewed.get_absolute_url() if next_unreviewed else None,
         'next_survey_url': next_unreviewed.survey_url() if next_unreviewed else None,
     })
+
+
+@require_POST
+def report_with_ai(request):
+    """The controller's hand-made report back, with the AI's answers added next to theirs."""
+    form = ControllerReportForm(request.POST, request.FILES)
+    if not form.is_valid():
+        for error in form.errors.get('file', []):
+            messages.error(request, error)
+        return redirect('player:index')
+    upload = form.cleaned_data['file']
+    try:
+        content, _ = ai_report.build(upload)
+    except Exception as exc:  # malformed workbook: openpyxl raises many kinds
+        messages.error(request, f'Не удалось прочитать отчёт: {exc}')
+        return redirect('player:index')
+    response = HttpResponse(
+        content, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+    response['Content-Disposition'] = content_disposition_header(
+        as_attachment=True, filename=ai_report.output_filename(upload.name),
+    )
+    return response
 
 
 @require_GET

@@ -238,6 +238,16 @@ class StationForm(forms.ModelForm):
 StationFormSet = forms.modelformset_factory(RadioStation, form=StationForm, extra=1, can_delete=True)
 
 
+class ControllerReportForm(forms.Form):
+    file = forms.FileField(label='Отчёт контролёра .xlsx', widget=forms.ClearableFileInput(attrs={'accept': '.xlsx'}))
+
+    def clean_file(self):
+        f = self.cleaned_data['file']
+        if Path(f.name).suffix.lower() != '.xlsx':
+            raise forms.ValidationError('Нужен файл .xlsx')
+        return f
+
+
 class StationImportForm(forms.Form):
     file = forms.FileField(label='Файл .xlsx', widget=forms.ClearableFileInput(attrs={'accept': '.xlsx'}))
 

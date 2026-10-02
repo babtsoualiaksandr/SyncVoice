@@ -624,3 +624,7 @@ table.stations .errorlist { font-size: 0.8rem; }
 .ai-try-result { border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
 .ai-try-result p { margin: 4px 0; }
 .ai-settings select { max-width: 100%; }
+
+.report-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.report-actions form { margin: 0; }
+.report-actions input[type="file"] { display: none; }

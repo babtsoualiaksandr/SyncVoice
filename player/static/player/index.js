@@ -59,3 +59,15 @@
 
   poll();
 })();
+
+// «Отчёт контролёра + ИИ»: send the chosen file at once; the answer is a download.
+{
+  const form = document.getElementById('report-ai-form');
+  if (form) {
+    form.querySelector('input[type="file"]').addEventListener('change', (event) => {
+      if (!event.target.files.length) return;
+      form.submit();
+      setTimeout(() => form.reset(), 1000);  // the same file can be chosen again
+    });
+  }
+}

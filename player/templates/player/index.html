@@ -29,7 +29,16 @@
   <div class="card-head">
     <h2>{% if day %}Звонки за {{ day|date:"d.m.Y" }}{% else %}Звонки{% endif %}</h2>
     {% if day %}
-      <a class="btn btn-primary" href="{% url 'player:report' day|date:'Y-m-d' %}">Скачать отчёт .xlsx</a>
+      <div class="report-actions">
+        <a class="btn btn-primary" href="{% url 'player:report' day|date:'Y-m-d' %}">Скачать отчёт .xlsx</a>
+        {% if ai_enabled %}
+          <form method="post" action="{% url 'player:report_with_ai' %}" enctype="multipart/form-data" id="report-ai-form"
+                title="Выберите отчёт, заполненный контролёром вручную: вернётся тот же файл со столбцами ИИ справа и листом «Итог ИИ»">
+            {% csrf_token %}
+            <label class="btn">Отчёт контролёра + ИИ…{{ report_form.file }}</label>
+          </form>
+        {% endif %}
+      </div>
     {% endif %}
   </div>
 

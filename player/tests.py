@@ -1794,3 +1794,84 @@ class StatusAiQueueTests(TestCase):
     def test_empty_queue(self):
         ai = self.client.get(reverse('player:status')).json()['ai']
         self.assertEqual(ai, {'analysis': 0, 'compare': 0, 'waiting': ''})
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key')
+class ReportWithAiTests(TestCase):
+    """The controller's hand-made report comes back with the AI's answers next to theirs."""
+
+    def setUp(self):
+        a = make_call(CALL_A, status=AudioFile.Status.DONE)
+        CallAnalysis.objects.create(audio=a, status=CallAnalysis.Status.DONE, city='Минск',
+                                    stations='Радио Юнистар (Другое), Авторадио', model_name='m', prompt_version='p1')
+        CallComparison.objects.create(audio=a, status=CallComparison.Status.DONE, discrepancies=[
+            {'field': 'Доход', 'survey_value': '25-50', 'call_value': 'половина', 'severity': 'ошибка'}])
+        make_call(CALL_C, status=AudioFile.Status.DONE)
+        b = make_call(CALL_B, status=AudioFile.Status.DONE)
+        CallAnalysis.objects.create(audio=b, status=CallAnalysis.Status.DONE, city='Гомель', stations='Не слушает')
+        CallComparison.objects.create(audio=b, status=CallComparison.Status.DONE, discrepancies=[])
+
+    def workbook(self):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append([None, 'Дата контроля', '№ телефона', 'Дата опроса  Время', 'Интервьюер', 'ID респондента',
+                   'Город проживания', 'Город слушания', 'Радиостанции / не слушал', 'Ошибки ',
+                   'Комментарий к ошибкам', 'Результат: брак/ошибки/ок', 'Прим'])
+        ws.append([None, None, 375290000103.0, datetime(2026, 9, 25, 9, 32, 14), 'Яна 308', None,
+                   'Минск', None, 'Авторадио, Юнистар', 'есть', 'не уточнила доход', 'ошибка'])
+        ws.append([None, None, 375290000104.0, datetime(2026, 9, 25, 9, 51, 11), 'Яна 308', None,
+                   'Минск', None, 'Не слушает', None, None, 'ок'])
+        ws.append([None, None, 375290000999.0, datetime(2026, 9, 25, 10, 0), 'Катя 301', None,
+                   'Брест', None, 'Не слушает', None, None, 'ок'])
+        ws.append([None, None, 375290000105.0, datetime(2026, 9, 25, 9, 18, 17), 'Катя 306'])  # not checked yet
+        ws['K2'].fill = openpyxl.styles.PatternFill(fill_type='solid', fgColor='FF00FF00')
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        buffer.name = 'Отчет записи 25.09.2026.xlsx'
+        return buffer
+
+    def test_build_adds_ai_columns_and_summary(self):
+        from . import ai_report
+        content, totals = ai_report.build(self.workbook())
+        self.assertEqual((totals.rows, totals.matched), (3, 2))
+        self.assertEqual(totals.missing, ['10:00 Катя 301'])
+        self.assertEqual(totals.city, [1, 2])
+        self.assertEqual(totals.stations, [2, 2])  # «Радио Юнистар (Другое)» = «Юнистар», any order
+        self.assertEqual(totals.errors, {'both': 1, 'ai_only': 0, 'missed': 0, 'clean': 1})
+
+        wb = openpyxl.load_workbook(io.BytesIO(content))
+        ws = wb['Sheet']
+        self.assertEqual(ws['K2'].fill.fgColor.rgb, 'FF00FF00')  # the controller's colours are kept
+        self.assertEqual(ws['Q1'].value, 'ИИ: город проживания')
+        self.assertEqual(ws['Q2'].value, 'Минск')
+        self.assertEqual(ws['Q2'].fill.fgColor.rgb, 'FFC6EFCE')
+        self.assertEqual(ws['Q3'].fill.fgColor.rgb, 'FFFFC7CE')  # Гомель vs Минск
+        self.assertEqual(ws['T2'].value, 'есть')
+        self.assertIn('ошибка: Доход', ws['U2'].value)
+        self.assertEqual(ws['U2'].fill.fgColor.rgb, 'FFFFC000')
+        self.assertEqual(ws['V4'].value, 'нет в SyncVoice')
+        self.assertEqual(ws['V5'].value, 'не проверен контролёром')
+        summary = {r[0]: r[1] for r in wb['Итог ИИ'].iter_rows(min_row=3, values_only=True) if r[0]}
+        self.assertEqual(summary['Ошибки контролёра найдены ИИ'], '1 из 1 (100 %)')
+
+    def test_upload_returns_file(self):
+        r = self.client.post(reverse('player:report_with_ai'), {'file': self.workbook()})
+        self.assertEqual(r.status_code, 200)
+        from urllib.parse import unquote
+        self.assertIn('Отчет записи 25.09.2026 + ИИ.xlsx', unquote(r['Content-Disposition']))
+        self.assertIn('Итог ИИ', openpyxl.load_workbook(io.BytesIO(r.content)).sheetnames)
+
+    def test_upload_rejects_other_files(self):
+        r = self.client.post(reverse('player:report_with_ai'), {'file': ContentFile(b'x', name='a.csv')}, follow=True)
+        self.assertContains(r, 'Нужен файл .xlsx')
+
+    def test_command_writes_file(self):
+        from django.core.management import call_command
+        src = Path(MEDIA_ROOT) / 'Отчет записи 25.09.2026.xlsx'
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(self.workbook().getvalue())
+        out = io.StringIO()
+        call_command('report_with_ai', str(src), stdout=out)
+        self.assertTrue((Path(MEDIA_ROOT) / 'export' / 'Отчет записи 25.09.2026 + ИИ.xlsx').exists())
+        self.assertIn('Радиостанции: ИИ совпал с контролёром: 2 из 2', out.getvalue())

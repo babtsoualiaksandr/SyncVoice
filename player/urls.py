@@ -17,6 +17,7 @@ urlpatterns = [
     path('pbx/sync/', views.sync_start, name='sync_start'),
     path('status/', views.status, name='status'),
     path('report/<str:day>.xlsx', views.report, name='report'),
+    path('report/with-ai/', views.report_with_ai, name='report_with_ai'),
     path('stats/', views.stats_view, name='stats'),
     path('audio/<int:pk>/', views.detail, name='detail'),
     path('audio/<int:pk>/review/', views.review_save, name='review_save'),
