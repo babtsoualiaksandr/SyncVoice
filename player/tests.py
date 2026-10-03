@@ -1792,10 +1792,12 @@ class StatusAiQueueTests(TestCase):
         CallComparison.objects.create(audio=a, status=CallComparison.Status.PENDING, error='CRM: нет связи')
         CallComparison.objects.create(audio=b, status=CallComparison.Status.PENDING)
         ai = self.client.get(reverse('player:status')).json()['ai']
+        ai.pop('now')  # see ModelShownTests
         self.assertEqual(ai, {'analysis': 1, 'compare': 2, 'waiting': 'CRM: нет связи', 'exhausted': []})
 
     def test_empty_queue(self):
         ai = self.client.get(reverse('player:status')).json()['ai']
+        ai.pop('now')
         self.assertEqual(ai, {'analysis': 0, 'compare': 0, 'waiting': '', 'exhausted': []})
 
 
@@ -2347,3 +2349,38 @@ class PromptReviewMeasureTests(TestCase):
         self.assertIn('| Звонок | Внутр. | Контролёр | ИИ сохранённый | ИИ заново | Модель |', text)
         self.assertIn('| ошибка | ок | ок | gemini-b |', text)  # the controller's error call
         self.assertIn('| ок | ошибка | ок | gemini-b |', text)  # the AI's error the strong model drops
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-main',
+                   GEMINI_COMPARE_MODEL='gemini-check')
+class ModelShownTests(TestCase):
+    """The main page names the model that answered and the one the queue goes to now."""
+
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'ai_fallback_models': 'gemini-spare'})
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        CallAnalysis.objects.create(audio=self.audio, status='done', model_name='gemini-main', prompt_version='abc12345')
+        CallComparison.objects.create(audio=self.audio, status='done', model_name='gemini-spare', discrepancies=[])
+
+    def test_steps_name_the_model_and_mark_a_spare_one(self):
+        call = self.client.get(reverse('player:index'), {'day': '2026-09-25'}).context['calls'][0]
+        fields, check = call.steps[1], call.steps[2]
+        self.assertIn('gemini-main · промпт abc12345', fields['title'])
+        self.assertFalse(fields['spare'])
+        self.assertIn('gemini-spare (запасная)', check['title'])
+        self.assertTrue(check['spare'])
+        self.assertContains(self.client.get(reverse('player:index'), {'day': '2026-09-25'}), 'step-spare')
+
+    def test_status_names_the_model_in_use(self):
+        now = self.client.get(reverse('player:status')).json()['ai']['now']
+        self.assertEqual(now['analysis'], {'model': 'gemini-main', 'spare': False, 'wait': 0})
+        self.assertEqual(now['compare']['model'], 'gemini-check')
+        analysis.mark_exhausted('gemini-main')
+        from .models import GeminiPace
+        GeminiPace.objects.create(model='gemini-spare', next_slot_at=timezone.now() + timezone.timedelta(seconds=4))
+        now = self.client.get(reverse('player:status')).json()['ai']['now']
+        self.assertEqual(now['analysis']['model'], 'gemini-spare')
+        self.assertTrue(now['analysis']['spare'])
+        self.assertIn(now['analysis']['wait'], (3, 4))
+        analysis.mark_exhausted('gemini-spare')
+        self.assertIsNone(self.client.get(reverse('player:status')).json()['ai']['now']['analysis']['model'])

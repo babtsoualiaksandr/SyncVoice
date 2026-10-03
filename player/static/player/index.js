@@ -32,6 +32,18 @@
       if (ai.analysis) jobs.push(`подсказки ${ai.analysis}`);
       if (ai.compare) jobs.push(`сверки ${ai.compare}`);
       parts.push(`ИИ в очереди: ${jobs.join(', ')}` + (ai.waiting ? ` (ждёт: ${ai.waiting})` : ''));
+      if (ai.now) {
+        const now = [];
+        const describeModel = (title, m) => {
+          if (!m) return;
+          if (!m.model) { now.push(`${title} → все модели исчерпали дневной лимит`); return; }
+          now.push(`${title} → ${m.model}` + (m.spare ? ' (запасная)' : '')
+                   + (m.wait ? `, следующий запрос через ${m.wait} с` : ''));
+        };
+        if (ai.analysis) describeModel('подсказки', ai.now.analysis);
+        if (ai.compare) describeModel('сверка', ai.now.compare);
+        if (now.length) parts.push(`Сейчас: ${now.join(' · ')}`);
+      }
     }
     if (ai && ai.exhausted && ai.exhausted.length) {
       parts.push('Дневной лимит Gemini исчерпан: '

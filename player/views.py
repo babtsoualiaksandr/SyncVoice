@@ -251,7 +251,7 @@ def _ai_queue():
         for name, until in analysis.exhausted_models().items()
     ]
     return {'analysis': waiting[0].count(), 'compare': waiting[1].count(), 'waiting': reason,
-            'exhausted': exhausted}
+            'exhausted': exhausted, 'now': analysis.current_models() if analysis.enabled() else None}
 
 
 def _keep_password(form, old_username, user_field, password_field, service):

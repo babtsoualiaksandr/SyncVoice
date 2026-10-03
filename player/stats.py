@@ -33,11 +33,14 @@ def interviewer_label(audio, defaults: dict[str, str]) -> str:
 
 def label_calls(calls) -> list:
     """The calls as a list, each with .interviewer_label, .steps, .ai_verdict, .ai_city, .respondent set."""
+    from .analysis import saved_models
+
     defaults = default_interviewers()
+    main = {'analysis': saved_models()[0]['model'], 'comparison': saved_models()[1]['model']}
     calls = list(calls)
     for audio in calls:
         audio.interviewer_label = interviewer_label(audio, defaults)
-        audio.steps = processing_steps(audio)
+        audio.steps = processing_steps(audio, main)
         audio.ai_verdict = ai_verdict(audio)
         suggestion = getattr(audio, 'analysis', None)
         audio.ai_city = suggestion.city if suggestion and suggestion.status == 'done' else ''
@@ -54,22 +57,34 @@ STEP_STATES = {  # status -> (css state, mark)
 }
 
 
-def processing_steps(audio) -> list[dict]:
-    """Subtitles, AI field suggestion, AI survey check: [{label, state, mark, title}]."""
+def processing_steps(audio, main_models: dict | None = None) -> list[dict]:
+    """Subtitles, AI field suggestion, AI survey check: [{label, state, mark, title, spare}].
+
+    The AI steps name the model and prompt that answered; `spare` — a spare model
+    answered (the main one was out of its daily limit), not the one from the settings.
+    """
+    main_models = main_models or {}
     steps = []
-    for label, item, name in [
-        ('Субтитры', audio, 'распознавание'),
-        ('Поля', getattr(audio, 'analysis', None), 'подсказка ИИ (город, станции)'),
-        ('Сверка', getattr(audio, 'comparison', None), 'сверка ИИ анкеты с разговором'),
+    for key, label, item, name in [
+        ('audio', 'Субтитры', audio, 'распознавание'),
+        ('analysis', 'Поля', getattr(audio, 'analysis', None), 'подсказка ИИ (город, станции)'),
+        ('comparison', 'Сверка', getattr(audio, 'comparison', None), 'сверка ИИ анкеты с разговором'),
     ]:
         if item is None:
-            steps.append({'label': label, 'state': 'none', 'mark': '–', 'title': f'{name.capitalize()}: нет'})
+            steps.append({'label': label, 'state': 'none', 'mark': '–', 'title': f'{name.capitalize()}: нет',
+                          'spare': False})
             continue
         state, mark = STEP_STATES.get(item.status, ('wait', '…'))
         title = f'{name.capitalize()}: {item.get_status_display().lower()}'
+        model = getattr(item, 'model_name', '') if item.status == 'done' else ''
+        spare = bool(model and main_models.get(key) and model != main_models[key])
+        if model:
+            title += f' · {model}' + (' (запасная)' if spare else '')
+            if getattr(item, 'prompt_version', ''):
+                title += f' · промпт {item.prompt_version}'
         if item.error:
             title += f' — {item.error}'
-        steps.append({'label': label, 'state': state, 'mark': mark, 'title': title})
+        steps.append({'label': label, 'state': state, 'mark': mark, 'title': title, 'spare': spare})
     return steps
 
 

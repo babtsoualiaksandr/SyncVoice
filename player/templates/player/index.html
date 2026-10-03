@@ -96,7 +96,7 @@
             <td>{{ audio.respondent|default:"" }}</td>
             <td>{{ audio.interviewer_label }}</td>
             <td class="num">{% if audio.duration %}{{ audio.duration|floatformat:0 }} с{% endif %}</td>
-            <td class="steps">{% for step in audio.steps %}<span class="step step-{{ step.state }}" title="{{ step.title }}">{{ step.label }} {{ step.mark }}</span>{% endfor %}</td>
+            <td class="steps">{% for step in audio.steps %}<span class="step step-{{ step.state }}" title="{{ step.title }}">{{ step.label }} {{ step.mark }}{% if step.spare %}<sup class="step-spare">зап.</sup>{% endif %}</span>{% endfor %}</td>
             <td>{{ audio.ai_city }}</td>
             <td>{% if audio.ai_verdict %}<span class="chip verdict-{{ audio.ai_verdict.key }}" title="{{ audio.ai_verdict.title }}">{{ audio.ai_verdict.label }}{% if audio.ai_verdict.count > 1 %} ×{{ audio.ai_verdict.count }}{% endif %}</span>{% else %}<span class="hint">—</span>{% endif %}</td>
             <td>

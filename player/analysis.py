@@ -192,6 +192,22 @@ def exhausted_models() -> dict[str, datetime]:
                 .order_by('exhausted_until').values_list('model', 'exhausted_until'))
 
 
+def current_models() -> dict:
+    """Which model the next suggestion / survey check will go to and when, for the main page.
+
+    {'analysis': {'model', 'spare', 'wait'}, 'compare': {...}}; model None — every model's daily limit is spent.
+    """
+    spent = exhausted_models()
+    paces = dict(GeminiPace.objects.values_list('model', 'next_slot_at'))
+    now = timezone.now()
+    out = {}
+    for key, main in zip(('analysis', 'compare'), saved_models()):
+        name = next((m for m in model_chain(main['model']) if m not in spent), None)
+        wait = (paces[name] - now).total_seconds() if name in paces else 0
+        out[key] = {'model': name, 'spare': bool(name and name != main['model']), 'wait': max(round(wait), 0)}
+    return out
+
+
 def mark_exhausted(name: str) -> datetime:
     until = quota_reset()
     GeminiQuota.objects.update_or_create(model=name, defaults={'exhausted_until': until})
