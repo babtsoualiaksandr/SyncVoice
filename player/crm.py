@@ -41,6 +41,7 @@ class Survey:
     phone: str
     operator_user_id: int | None
     time: datetime | None
+    respondent_name: str = ''  # filled by fetch_answers; kept locally, never sent to Gemini
 
     @property
     def path(self) -> str:
@@ -244,6 +245,7 @@ class _SurveyPageParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.values: dict[str, str] = {}
+        self.respondent_name = ''
         self.members_survey_id = ''
         self._select = None
         self._option_selected = False
@@ -251,7 +253,9 @@ class _SurveyPageParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag == 'input' and attrs.get('id') in PROFILE_FIELDS:
+        if tag == 'input' and attrs.get('id') == 'RespName':
+            self.respondent_name = (attrs.get('value') or '').strip()
+        elif tag == 'input' and attrs.get('id') in PROFILE_FIELDS:
             self.values[attrs['id']] = (attrs.get('value') or '').strip()
         elif tag == 'select' and attrs.get('id') in PROFILE_FIELDS:
             self._select = attrs['id']
@@ -275,12 +279,22 @@ class _SurveyPageParser(HTMLParser):
             self._select = None
 
 
-def parse_survey_page(html: str) -> tuple[dict, str]:
-    """({«Город»: «Минск», …}, MembersSurveyID) from a /admin/Reports/update<Id> page."""
+def _parse_page(html: str) -> _SurveyPageParser:
     parser = _SurveyPageParser()
     parser.feed(html)
+    return parser
+
+
+def parse_survey_page(html: str) -> tuple[dict, str]:
+    """({«Город»: «Минск», …}, MembersSurveyID) from a /admin/Reports/update<Id> page."""
+    parser = _parse_page(html)
     profile = {label: parser.values.get(field, '') for field, label in PROFILE_FIELDS.items()}
     return profile, parser.members_survey_id
+
+
+def respondent_name(html: str) -> str:
+    """The respondent's name from the survey page — for the call list only, not for the AI."""
+    return _parse_page(html).respondent_name
 
 
 def _without_personal(value):
@@ -299,6 +313,7 @@ def fetch_answers(client: 'CrmClient', survey: Survey) -> dict:
     """
     page = client.request('GET', survey.path)
     profile, members_survey_id = parse_survey_page(page.text)
+    survey.respondent_name = respondent_name(page.text)
     members_survey_id = members_survey_id or survey.members_survey_id
     response = client.request('POST', 'admin/Reports/getMember', data={'MembersSurveyID': members_survey_id},
                               headers={'X-Requested-With': 'XMLHttpRequest', 'Referer': client.url(survey.path)})
@@ -313,6 +328,8 @@ def fetch_answers(client: 'CrmClient', survey: Survey) -> dict:
             survey_day = datetime.strptime(raw_day[:10], '%Y-%m-%d').strftime('%d.%m.%Y')
         except ValueError:
             survey_day = raw_day[:10]
+    if not survey.respondent_name and isinstance(member.get('MemberName'), str):
+        survey.respondent_name = member['MemberName'].strip()
     return {
         'Профиль': profile,
         'День «вчера»': survey_day,

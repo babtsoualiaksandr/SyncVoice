@@ -2041,3 +2041,101 @@ class ModelChoiceTests(TestCase):
         with override_settings(GEMINI_COMPARE_MODEL='gemini-env-strong'):
             main, check = analysis.resolve_models('gemini-typed', '')
             self.assertEqual(check['model'], 'gemini-env-strong')
+
+
+class RespondentNameTests(TestCase):
+    def test_name_is_read_apart_from_the_answers(self):
+        client = mock.Mock()
+        client.url.side_effect = lambda path: 'http://crm.local/' + path
+        client.request.side_effect = [crm_reply(SURVEY_PAGE), crm_reply('{}', json_data=GET_MEMBER)]
+        survey = crm.parse_survey(CRM_FIND[1])
+        answers = crm.fetch_answers(client, survey)
+        self.assertEqual(survey.respondent_name, 'Мария')
+        self.assertNotIn('Мария', json.dumps(answers, ensure_ascii=False))
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-test')
+    def test_check_stores_the_name_but_does_not_send_it(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'crm_url': 'http://crm.local', 'crm_username': 'sv'})
+        audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=audio, index=0, start=1, end=2, text='Минск.')
+        survey = crm.parse_survey(CRM_FIND[1])
+
+        def fetch(client, s):
+            s.respondent_name = 'Мария'
+            return {'Профиль': {'Возраст': '26'}}
+
+        crm_client = mock.Mock()
+        crm_client.find.return_value = [survey]
+        compare_module.queue(audio)
+        fake = FakeGemini(compare_module.Comparison(review='', discrepancies=[], summary='ok'))
+        with mock.patch('player.crm.fetch_answers', side_effect=fetch):
+            compare_module.run_comparison(audio.comparison, gemini_client=fake, crm_client=crm_client)
+        audio.comparison.refresh_from_db()
+        self.assertEqual(audio.comparison.respondent_name, 'Мария')
+        sent = fake.calls[0]['contents'] + fake.calls[0]['config'].system_instruction
+        self.assertNotIn('Мария', sent)
+
+    @override_settings(MEDIA_ROOT=MEDIA_ROOT)
+    def test_fill_names_command(self):
+        from django.core.management import call_command
+        AppSettings.objects.update_or_create(pk=1, defaults={'crm_url': 'http://crm.local', 'crm_username': 'sv'})
+        audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        CallComparison.objects.create(audio=audio, status='done', survey_id=200)
+        client = mock.Mock()
+        client.request.return_value = crm_reply(SURVEY_PAGE)
+        with mock.patch('player.crm.get_client', return_value=client):
+            call_command('fill_names', stdout=io.StringIO())
+        self.assertEqual(client.request.call_args.args, ('GET', 'admin/Reports/update200'))
+        audio.comparison.refresh_from_db()
+        self.assertEqual(audio.comparison.respondent_name, 'Мария')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class CallListAiTests(TestCase):
+    """Main page: year/month filter, processing steps, the AI's city and verdict, the AI filter."""
+
+    def setUp(self):
+        self.a = make_call(CALL_A, status=AudioFile.Status.DONE)  # 25.09.2026 09:32
+        CallAnalysis.objects.create(audio=self.a, status='done', city='Гомель')
+        CallComparison.objects.create(audio=self.a, status='done', respondent_name='Мария', discrepancies=[
+            {'field': 'Доход', 'survey_value': '25-50', 'call_value': 'половина', 'severity': 'рекомендация'},
+            {'field': 'Возраст', 'survey_value': '59', 'call_value': '57', 'severity': 'ошибка'},
+        ])
+        self.b = make_call(CALL_B, status=AudioFile.Status.DONE)
+        CallAnalysis.objects.create(audio=self.b, status='error', error='Нет расшифровки.')
+        CallComparison.objects.create(audio=self.b, status='done', discrepancies=[])
+        self.c = make_call(CALL_C, status=AudioFile.Status.PENDING)
+        make_call('out-375290000106-308-20260830-100000-1790000004.103.wav', status=AudioFile.Status.DONE)
+
+    def page(self, **params):
+        return self.client.get(reverse('player:index'), params)
+
+    def test_steps_and_verdict(self):
+        calls = {a.pk: a for a in self.page(day='2026-09-25').context['calls']}
+        a, b, c = calls[self.a.pk], calls[self.b.pk], calls[self.c.pk]
+        self.assertEqual((a.respondent, a.ai_city), ('Мария', 'Гомель'))
+        self.assertEqual(a.ai_verdict['key'], 'error')  # the worst item wins
+        self.assertIn('Возраст', a.ai_verdict['title'])
+        self.assertEqual(b.ai_verdict['key'], 'ok')
+        self.assertIsNone(c.ai_verdict)
+        self.assertEqual([s['state'] for s in b.steps], ['done', 'error', 'done'])
+        self.assertIn('Нет расшифровки.', b.steps[1]['title'])
+        self.assertEqual([s['state'] for s in c.steps], ['wait', 'none', 'none'])
+
+    def test_ai_filter_and_sort(self):
+        r = self.page(day='2026-09-25', ai='error')
+        self.assertEqual([a.pk for a in r.context['calls']], [self.a.pk])
+        self.assertEqual(len(r.context['day_stats']) > 0, True)  # stats still count the whole day
+        r = self.page(day='2026-09-25', sort='ai')
+        self.assertEqual([a.pk for a in r.context['calls']], [self.a.pk, self.b.pk, self.c.pk])
+        self.assertContains(r, 'Мария')
+        self.assertContains(r, 'verdict-error')
+
+    def test_month_and_year_pick_the_latest_day(self):
+        self.assertEqual(self.page().context['day'], date(2026, 9, 25))
+        self.assertEqual(self.page(month='2026-08').context['day'], date(2026, 8, 30))
+        r = self.page(day='2026-09-25')
+        cal = r.context['calendar']
+        self.assertEqual(cal['years'], [2026])
+        self.assertEqual([m['value'] for m in cal['months']], ['2026-09', '2026-08'])
+        self.assertEqual([d['day'] for d in cal['month_days']], [date(2026, 9, 25)])  # August days not shown

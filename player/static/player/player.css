@@ -628,3 +628,26 @@ table.stations .errorlist { font-size: 0.8rem; }
 .report-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .report-actions form { margin: 0; }
 .report-actions input[type="file"] { display: none; }
+
+/* Main page: period filter, AI filter, processing steps and the AI verdict */
+.period-filter { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 10px; }
+.period-filter label { display: grid; gap: 2px; font-size: 0.85rem; color: var(--muted); }
+.period-filter select { padding: 4px 6px; font: inherit; color: var(--text, inherit); }
+.ai-filter { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.chip {
+  display: inline-block; padding: 1px 8px; border: 1px solid var(--border, #ccc); border-radius: 999px;
+  font-size: 0.85rem; white-space: nowrap; text-decoration: none; color: inherit;
+}
+.chip span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-filter .chip.active { border-color: var(--accent); background: var(--accent-soft); }
+.verdict-error { border-color: #e0a100; background: #ffc00033; }
+.verdict-check { border-color: #c9b000; background: #ffe60026; }
+.verdict-advice { border-color: #3aa83a; background: #00ff0022; }
+.verdict-ok { border-color: var(--ok); color: var(--ok); }
+.verdict-none { color: var(--muted); }
+.steps { white-space: nowrap; }
+.step { display: inline-block; margin-right: 6px; font-size: 0.8rem; cursor: default; }
+.step-done { color: var(--ok); }
+.step-wait { color: var(--warn); }
+.step-error { color: var(--danger); font-weight: 600; }
+.step-none { color: var(--muted); }

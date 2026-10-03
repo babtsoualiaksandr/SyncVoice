@@ -75,3 +75,15 @@
     });
   }
 }
+
+// Year / month filter: go to the latest downloaded day of the chosen period.
+{
+  const form = document.getElementById('period-filter');
+  if (form) {
+    for (const select of form.querySelectorAll('select')) {
+      select.addEventListener('change', () => {
+        window.location.search = `?${select.dataset.param}=${encodeURIComponent(select.value)}`;
+      });
+    }
+  }
+}

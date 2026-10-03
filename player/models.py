@@ -367,6 +367,10 @@ class CallComparison(models.Model):
     audio = models.OneToOneField(AudioFile, on_delete=models.CASCADE, related_name='comparison')
     status = models.CharField('статус', max_length=16, choices=Status, default=Status.PENDING)
     survey_id = models.PositiveIntegerField('анкета CRM', null=True, blank=True)
+    respondent_name = models.CharField(
+        'имя респондента', max_length=100, blank=True,
+        help_text='Из анкеты CRM — для списка звонков. В Gemini не отправляется.',
+    )
     discrepancies = models.JSONField('расхождения', default=list, blank=True)
     summary = models.TextField('итог', blank=True)
     model_name = models.CharField('модель', max_length=64, blank=True)

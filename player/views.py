@@ -58,12 +58,59 @@ def _days_summary():
     )
 
 
-def _sort_columns(day, sort):
+MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь',
+          'октябрь', 'ноябрь', 'декабрь']
+
+
+def _pick_day(days: list, params) -> tuple:
+    """The day to show: ?day=, else the latest day of ?month=YYYY-MM or ?year=YYYY, else the latest day."""
+    known = [d['day'] for d in days]
+    if (day := parse_date(params.get('day') or '')) and day in known:
+        return day
+    month, year = params.get('month', ''), params.get('year', '')
+    for d in known:  # newest first
+        if (month and f'{d:%Y-%m}' == month) or (not month and year and f'{d:%Y}' == year):
+            return d
+    return parse_date(params.get('day') or '') or (known[0] if known else None)
+
+
+def _calendar(days: list, day) -> dict:
+    """Year and month choices and the selected month's downloaded days, for the filter above the table."""
+    years = sorted({d['day'].year for d in days}, reverse=True)
+    months = {}
+    for d in days:
+        if day and d['day'].year == day.year:
+            m = months.setdefault(d['day'].month, {'total': 0, 'reviewed': 0})
+            m['total'] += d['total']
+            m['reviewed'] += d['reviewed']
+    return {
+        'years': years,
+        'months': [{'value': f'{day.year}-{m:02}', 'label': MONTHS[m - 1], 'selected': m == day.month, **c}
+                   for m, c in sorted(months.items(), reverse=True)] if day else [],
+        'month_days': [d for d in days if day and (d['day'].year, d['day'].month) == (day.year, day.month)],
+    }
+
+
+AI_FILTERS = [('', 'Все'), ('error', 'ИИ: ошибка'), ('check', 'проверить'), ('advice', 'рекомендация'),
+              ('ok', 'ок'), ('none', 'без сверки')]
+
+
+def _filter_ai(calls: list, key: str) -> list:
+    if key == 'none':
+        return [a for a in calls if not a.ai_verdict]
+    if key:
+        return [a for a in calls if a.ai_verdict and a.ai_verdict['key'] == key]
+    return calls
+
+
+def _sort_columns(day, sort, ai=''):
     """Header cells of the day's call table: label, link that sorts by it, arrow of the current sort."""
-    base = f"{reverse('player:index')}?day={day:%Y-%m-%d}&sort=" if day else '?sort='
+    keep = f'&ai={ai}' if ai else ''
+    base = f"{reverse('player:index')}?day={day:%Y-%m-%d}{keep}&sort=" if day else '?sort='
     columns = []
-    for key, label in [('time', 'Время'), (None, 'Телефон'), ('interviewer', 'Интервьюер'),
-                       ('duration', 'Длит.'), ('status', 'Субтитры'), ('result', 'Контроль')]:
+    for key, label in [('time', 'Время'), (None, 'Телефон'), ('respondent', 'Респондент'),
+                       ('interviewer', 'Интервьюер'), ('duration', 'Длит.'), ('status', 'Обработка'),
+                       ('city', 'Город (ИИ)'), ('ai', 'ИИ'), ('result', 'Контроль')]:
         if key is None:
             columns.append({'label': label})
             continue
@@ -79,17 +126,22 @@ def _sort_columns(day, sort):
 
 def index(request, upload_form=None):
     days = list(_days_summary())
-    day = parse_date(request.GET.get('day') or '') or (days[0]['day'] if days else None)
-    calls = stats.label_calls(calls_for_day(day)) if day else []
-    calls, sort = stats.sort_calls(calls, request.GET.get('sort', 'time'))
-    day_stats, day_total = stats.interviewer_stats(calls)
+    day = _pick_day(days, request.GET)
+    all_calls = stats.label_calls(calls_for_day(day)) if day else []
+    ai = request.GET.get('ai', '')
+    calls, sort = stats.sort_calls(_filter_ai(all_calls, ai), request.GET.get('sort', 'time'))
+    day_stats, day_total = stats.interviewer_stats(all_calls)
+    ai_counts = {key: len(_filter_ai(all_calls, key)) for key, _ in AI_FILTERS}
     settings = AppSettings.load()
     return render(request, 'player/index.html', {
         'days': days,
         'day': day,
         'calls': calls,
         'sort': sort,
-        'columns': _sort_columns(day, sort),
+        'columns': _sort_columns(day, sort, ai),
+        'calendar': _calendar(days, day),
+        'ai_filter': ai,
+        'ai_filters': [{'key': k, 'label': label, 'count': ai_counts[k]} for k, label in AI_FILTERS],
         'day_stats': day_stats,
         'day_total': day_total,
         'other_audio': AudioFile.objects.filter(call_started_at=None),

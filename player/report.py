@@ -61,7 +61,7 @@ def report_filename(day: date) -> str:
 def calls_for_day(day: date):
     return (
         AudioFile.objects.filter(call_started_at__date=day)
-        .select_related('review', 'analysis')
+        .select_related('review', 'analysis', 'comparison')
         .order_by('call_started_at')
     )
 

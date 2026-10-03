@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 from .models import CallReview, Interviewer
 
-SORT_KEYS = ('time', 'interviewer', 'duration', 'status', 'result')
+SORT_KEYS = ('time', 'respondent', 'interviewer', 'duration', 'status', 'city', 'ai', 'result')
 RESULT_ORDER = {'ок': 0, 'ошибка': 1, 'брак': 2}
 
 
@@ -32,12 +32,69 @@ def interviewer_label(audio, defaults: dict[str, str]) -> str:
 
 
 def label_calls(calls) -> list:
-    """The calls as a list, each with .interviewer_label set."""
+    """The calls as a list, each with .interviewer_label, .steps, .ai_verdict, .ai_city, .respondent set."""
     defaults = default_interviewers()
     calls = list(calls)
     for audio in calls:
         audio.interviewer_label = interviewer_label(audio, defaults)
+        audio.steps = processing_steps(audio)
+        audio.ai_verdict = ai_verdict(audio)
+        suggestion = getattr(audio, 'analysis', None)
+        audio.ai_city = suggestion.city if suggestion and suggestion.status == 'done' else ''
+        check = getattr(audio, 'comparison', None)
+        audio.respondent = check.respondent_name if check else ''
     return calls
+
+
+STEP_STATES = {  # status -> (css state, mark)
+    'pending': ('wait', '…'),
+    'processing': ('wait', '⟳'),
+    'done': ('done', '✓'),
+    'error': ('error', '✗'),
+}
+
+
+def processing_steps(audio) -> list[dict]:
+    """Subtitles, AI field suggestion, AI survey check: [{label, state, mark, title}]."""
+    steps = []
+    for label, item, name in [
+        ('Субтитры', audio, 'распознавание'),
+        ('Поля', getattr(audio, 'analysis', None), 'подсказка ИИ (город, станции)'),
+        ('Сверка', getattr(audio, 'comparison', None), 'сверка ИИ анкеты с разговором'),
+    ]:
+        if item is None:
+            steps.append({'label': label, 'state': 'none', 'mark': '–', 'title': f'{name.capitalize()}: нет'})
+            continue
+        state, mark = STEP_STATES.get(item.status, ('wait', '…'))
+        title = f'{name.capitalize()}: {item.get_status_display().lower()}'
+        if item.error:
+            title += f' — {item.error}'
+        steps.append({'label': label, 'state': state, 'mark': mark, 'title': title})
+    return steps
+
+
+# What the AI survey check concluded, worst first.
+VERDICTS = {
+    'ошибка': {'key': 'error', 'label': 'ошибка', 'order': 0},
+    'проверить': {'key': 'check', 'label': 'проверить', 'order': 1},
+    'рекомендация': {'key': 'advice', 'label': 'рекомендация', 'order': 2},
+    'ок': {'key': 'ok', 'label': 'ок', 'order': 3},
+}
+NO_VERDICT_ORDER = 4
+
+
+def ai_verdict(audio) -> dict | None:
+    """The survey check's worst severity with a count and the items as a tooltip; None until it is done."""
+    check = getattr(audio, 'comparison', None)
+    if not check or check.status != 'done':
+        return None
+    items = check.discrepancies or []
+    worst = min((d.get('severity') for d in items if d.get('severity') in VERDICTS),
+                key=lambda sev: VERDICTS[sev]['order'], default='ок')
+    count = sum(d.get('severity') == worst for d in items) if worst != 'ок' else 0
+    lines = [f"{d.get('severity')}: {d.get('field')} — анкета «{d.get('survey_value')}», "
+             f"разговор «{d.get('call_value')}»" for d in items]
+    return {**VERDICTS[worst], 'count': count, 'title': '\n'.join(lines) or check.summary}
 
 
 def _review_state(audio) -> tuple:
@@ -59,6 +116,10 @@ def sort_calls(calls: list, sort: str) -> tuple[list, str]:
         'interviewer': lambda a: (a.interviewer_label.lower(), a.call_started_at),
         'duration': lambda a: (a.duration or 0, a.call_started_at),
         'status': lambda a: (a.status, a.call_started_at),
+        'respondent': lambda a: (getattr(a, 'respondent', '').lower() or '\uffff', a.call_started_at),
+        'city': lambda a: (getattr(a, 'ai_city', '') or '\uffff', a.call_started_at),
+        'ai': lambda a: (a.ai_verdict['order'] if getattr(a, 'ai_verdict', None) else NO_VERDICT_ORDER,
+                         a.call_started_at),
         'result': lambda a: (_review_state(a), a.call_started_at),
     }
     return sorted(calls, key=keys[key], reverse=sort.startswith('-')), sort

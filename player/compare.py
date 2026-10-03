@@ -233,12 +233,13 @@ def run_comparison(item: CallComparison, gemini_client=None, crm_client=None) ->
         raise RetryLater(f'CRM: {exc}')
     if not survey:
         return _fail(item, 'Анкета этого звонка в CRM не найдена.')
+    item.survey_id = survey.id
+    item.respondent_name = survey.respondent_name
     try:
         result, usage = check(audio, answers, gemini_client)
     except AnalysisError as exc:
         return _fail(item, str(exc))
 
-    item.survey_id = survey.id
     item.discrepancies = clean(result)
     item.summary = result.summary.strip()
     item.model_name = usage['model']

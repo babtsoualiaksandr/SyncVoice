@@ -1,6 +1,7 @@
 {% extends 'player/base.html' %}
 {% load static %}
 
+{% block page_class %}page-wide{% endblock %}
 {% block content %}
 <p class="flash flash-error" id="worker-warning" hidden>
   Фоновый обработчик не запущен — записи не скачиваются и не распознаются.
@@ -42,12 +43,38 @@
     {% endif %}
   </div>
 
-  <nav class="day-tabs" aria-label="Дни">
-    {% for d in days %}
-      <a href="?day={{ d.day|date:'Y-m-d' }}" class="{% if d.day == day %}active{% endif %}">
+  <form class="period-filter" method="get" action="" id="period-filter">
+    <label>Год
+      <select name="year" data-param="year">
+        {% for y in calendar.years %}<option value="{{ y }}" {% if day and y == day.year %}selected{% endif %}>{{ y }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Месяц
+      <select name="month" data-param="month">
+        {% for m in calendar.months %}
+          <option value="{{ m.value }}" {% if m.selected %}selected{% endif %}>{{ m.label }} — проверено {{ m.reviewed }}/{{ m.total }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <noscript><button class="btn" type="submit">Показать</button></noscript>
+  </form>
+
+  <nav class="day-tabs" aria-label="Скачанные дни месяца">
+    {% for d in calendar.month_days %}
+      <a href="?day={{ d.day|date:'Y-m-d' }}" class="{% if d.day == day %}active{% endif %}"
+         title="Проверено {{ d.reviewed }} из {{ d.total }}, распознано {{ d.transcribed }}">
         <strong>{{ d.day|date:"d.m" }}</strong>
         <span>{{ d.reviewed }}/{{ d.total }}</span>
       </a>
+    {% endfor %}
+  </nav>
+
+  <nav class="ai-filter" aria-label="Вывод ИИ">
+    {% for f in ai_filters %}
+      {% if f.count or not f.key %}
+        <a href="?day={{ day|date:'Y-m-d' }}{% if f.key %}&ai={{ f.key }}{% endif %}"
+           class="chip{% if f.key %} verdict-{{ f.key }}{% endif %}{% if f.key == ai_filter %} active{% endif %}">{{ f.label }} <span>{{ f.count }}</span></a>
+      {% endif %}
     {% endfor %}
   </nav>
 
@@ -66,9 +93,12 @@
           <tr class="{% if audio.review.completed %}is-reviewed{% endif %}">
             <td class="num">{{ audio.call_started_at|time:"H:i:s" }}</td>
             <td><a href="{{ audio.get_absolute_url }}">{{ audio.phone_display }}</a></td>
+            <td>{{ audio.respondent|default:"" }}</td>
             <td>{{ audio.interviewer_label }}</td>
             <td class="num">{% if audio.duration %}{{ audio.duration|floatformat:0 }} с{% endif %}</td>
-            <td><span class="status status-{{ audio.status }}">{{ audio.get_status_display }}</span></td>
+            <td class="steps">{% for step in audio.steps %}<span class="step step-{{ step.state }}" title="{{ step.title }}">{{ step.label }} {{ step.mark }}</span>{% endfor %}</td>
+            <td>{{ audio.ai_city }}</td>
+            <td>{% if audio.ai_verdict %}<span class="chip verdict-{{ audio.ai_verdict.key }}" title="{{ audio.ai_verdict.title }}">{{ audio.ai_verdict.label }}{% if audio.ai_verdict.count > 1 %} ×{{ audio.ai_verdict.count }}{% endif %}</span>{% else %}<span class="hint">—</span>{% endif %}</td>
             <td>
               {% if audio.review.completed %}
                 <span class="result result-{{ audio.review.result|default:'none' }}">{{ audio.review.result|default:"проверен" }}</span>
