@@ -651,3 +651,5 @@ table.stations .errorlist { font-size: 0.8rem; }
 .step-wait { color: var(--warn); }
 .step-error { color: var(--danger); font-weight: 600; }
 .step-none { color: var(--muted); }
+
+.call-position { font-size: 0.8rem; color: var(--muted); white-space: nowrap; padding: 0 4px; }

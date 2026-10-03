@@ -3,7 +3,7 @@ import re
 import socket
 import warnings
 from datetime import datetime, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import requests
 import urllib3
@@ -139,6 +139,7 @@ def index(request, upload_form=None):
         'calls': calls,
         'sort': sort,
         'columns': _sort_columns(day, sort, ai),
+        'list_query': urlencode(_list_params({'sort': sort, 'ai': ai})),
         'calendar': _calendar(days, day),
         'ai_filter': ai,
         'ai_filters': [{'key': k, 'label': label, 'count': ai_counts[k]} for k, label in AI_FILTERS],
@@ -392,19 +393,56 @@ def test_crm(request):
     return JsonResponse({'ok': True, 'message': 'Вход в CRM работает.'})
 
 
-def _day_neighbours(audio):
-    """Previous/next call of the same day and the next call not yet reviewed."""
+SORT_LABELS = {
+    'time': 'по времени', 'respondent': 'по респонденту', 'interviewer': 'по интервьюеру',
+    'duration': 'по длительности', 'status': 'по обработке', 'city': 'по городу ИИ', 'ai': 'по выводу ИИ',
+    'result': 'по контролю',
+}
+AI_FILTER_LABELS = {'error': 'ИИ: ошибка', 'check': 'ИИ: проверить', 'advice': 'ИИ: рекомендация',
+                    'ok': 'ИИ: ок', 'none': 'без сверки'}
+
+
+def _list_params(params) -> dict:
+    """The call table's sort and AI filter, carried from the list to a call page and back."""
+    out = {}
+    sort = params.get('sort', '')
+    if sort and sort.lstrip('-') in stats.SORT_KEYS and sort != 'time':
+        out['sort'] = sort
+    if params.get('ai', '') in AI_FILTER_LABELS:
+        out['ai'] = params['ai']
+    return out
+
+
+def _with_query(url: str, query: str) -> str:
+    return f'{url}?{query}' if query else url
+
+
+def _day_neighbours(audio, params=None) -> dict:
+    """Previous / next call and the next one not yet reviewed, in the order of the call table
+    the controller came from (its sort and AI filter); without them — the whole day by time."""
+    nav = {'prev_call': None, 'next_call': None, 'next_unreviewed': None, 'query': '', 'label': ''}
     if not audio.call_started_at:
-        return None, None, None
-    calls = list(calls_for_day(timezone.localtime(audio.call_started_at).date()))
-    i = next(n for n, a in enumerate(calls) if a.pk == audio.pk)
-    prev_call = calls[i - 1] if i > 0 else None
-    next_call = calls[i + 1] if i + 1 < len(calls) else None
-    ordered = calls[i + 1:] + calls[:i]
-    next_unreviewed = next(
-        (a for a in ordered if not (hasattr(a, 'review') and a.review.completed)), None
-    )
-    return prev_call, next_call, next_unreviewed
+        return nav
+    context = _list_params(params or {})
+    calls = stats.label_calls(calls_for_day(timezone.localtime(audio.call_started_at).date()))
+    listed, _ = stats.sort_calls(_filter_ai(calls, context.get('ai', '')), context.get('sort', 'time'))
+    if not any(a.pk == audio.pk for a in listed):  # e.g. its AI verdict changed meanwhile
+        context, listed = {}, calls
+    i = next(n for n, a in enumerate(listed) if a.pk == audio.pk)
+    ordered = listed[i + 1:] + listed[:i]
+    sort = context.get('sort', 'time')
+    label = [f'{i + 1} из {len(listed)}']
+    if 'ai' in context:
+        label.append(AI_FILTER_LABELS[context['ai']])
+    if 'sort' in context:
+        label.append(SORT_LABELS[sort.lstrip('-')] + (' ↓' if sort.startswith('-') else ''))
+    return {
+        'prev_call': listed[i - 1] if i > 0 else None,
+        'next_call': listed[i + 1] if i + 1 < len(listed) else None,
+        'next_unreviewed': next((a for a in ordered if not (hasattr(a, 'review') and a.review.completed)), None),
+        'query': urlencode(context),
+        'label': ' · '.join(label),
+    }
 
 
 def _review_form(audio, data=None):
@@ -441,7 +479,7 @@ def _analysis_json(item):
 def detail(request, pk):
     audio = get_object_or_404(AudioFile, pk=pk)
     form, review = _review_form(audio)
-    prev_call, next_call, next_unreviewed = _day_neighbours(audio)
+    nav = _day_neighbours(audio, request.GET)
     used_stations = CallReview.objects.exclude(stations='').values_list('stations', flat=True).distinct()
     return render(request, 'player/detail.html', {
         'audio': audio,
@@ -456,9 +494,16 @@ def detail(request, pk):
         'comparison': _comparison_json(CallComparison.objects.filter(audio=audio).first()),
         'crm_lookup_url': reverse('player:crm_lookup', args=[audio.pk]) if crm.configured() and audio.phone else '',
         'ai': _analysis_json(_analysis_of(audio)),
-        'prev_call': prev_call,
-        'next_call': next_call,
-        'next_unreviewed': next_unreviewed,
+        'prev_call': nav['prev_call'],
+        'next_call': nav['next_call'],
+        'prev_url': _with_query(nav['prev_call'].get_absolute_url(), nav['query']) if nav['prev_call'] else '',
+        'next_url': _with_query(nav['next_call'].get_absolute_url(), nav['query']) if nav['next_call'] else '',
+        'next_unreviewed': nav['next_unreviewed'],
+        'next_unreviewed_url': (_with_query(nav['next_unreviewed'].get_absolute_url(), nav['query'])
+                                if nav['next_unreviewed'] else ''),
+        'list_query': nav['query'],
+        'list_label': nav['label'],
+        'save_url': _with_query(reverse('player:review_save', args=[audio.pk]), nav['query']),
     })
 
 
@@ -489,11 +534,12 @@ def review_save(request, pk):
     if request.POST.get('complete') == '1':
         review.completed = True
     review.save()
-    _, _, next_unreviewed = _day_neighbours(audio)
+    nav = _day_neighbours(audio, request.GET)  # the call table's order, from the form's action URL
+    next_unreviewed = nav['next_unreviewed']
     return JsonResponse({
         'ok': True,
         'completed': review.completed,
-        'next_url': next_unreviewed.get_absolute_url() if next_unreviewed else None,
+        'next_url': _with_query(next_unreviewed.get_absolute_url(), nav['query']) if next_unreviewed else None,
         'next_survey_url': next_unreviewed.survey_url() if next_unreviewed else None,
     })
 

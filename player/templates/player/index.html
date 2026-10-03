@@ -92,7 +92,7 @@
         {% for audio in calls %}
           <tr class="{% if audio.review.completed %}is-reviewed{% endif %}">
             <td class="num">{{ audio.call_started_at|time:"H:i:s" }}</td>
-            <td><a href="{{ audio.get_absolute_url }}">{{ audio.phone_display }}</a></td>
+            <td><a href="{{ audio.get_absolute_url }}{% if list_query %}?{{ list_query }}{% endif %}">{{ audio.phone_display }}</a></td>
             <td>{{ audio.respondent|default:"" }}</td>
             <td>{{ audio.interviewer_label }}</td>
             <td class="num">{% if audio.duration %}{{ audio.duration|floatformat:0 }} с{% endif %}</td>

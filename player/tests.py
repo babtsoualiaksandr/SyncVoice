@@ -2202,3 +2202,57 @@ class AdminTests(TestCase):
     def test_settings_is_a_single_page(self):
         r = self.client.get(reverse('admin:player_appsettings_changelist'))
         self.assertRedirects(r, reverse('admin:player_appsettings_change', args=[AppSettings.load().pk]))
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class ListNavigationTests(TestCase):
+    """‹ ›, Ctrl+Enter and «back» follow the call table's sort and AI filter."""
+
+    def setUp(self):
+        # By time: C 09:18 (306), A 09:32 (308), B 09:51 (308)
+        self.c = make_call(CALL_C, status=AudioFile.Status.DONE)
+        self.a = make_call(CALL_A, status=AudioFile.Status.DONE)
+        self.b = make_call(CALL_B, status=AudioFile.Status.DONE)
+        error = [{'field': 'Возраст', 'survey_value': '59', 'call_value': '57', 'severity': 'ошибка'}]
+        CallComparison.objects.create(audio=self.c, status='done', discrepancies=error)
+        CallComparison.objects.create(audio=self.a, status='done', discrepancies=[])
+        CallComparison.objects.create(audio=self.b, status='done', discrepancies=error)
+
+    def nav(self, audio, **params):
+        r = self.client.get(audio.get_absolute_url(), params)
+        return r, r.context['prev_call'], r.context['next_call']
+
+    def test_without_list_context_by_time(self):
+        r, prev, nxt = self.nav(self.a)
+        self.assertEqual((prev, nxt), (self.c, self.b))
+        self.assertEqual(r.context['list_label'], '2 из 3')
+
+    def test_ai_filter_skips_other_calls(self):
+        r, prev, nxt = self.nav(self.c, ai='error')
+        self.assertEqual((prev, nxt), (None, self.b))  # A has no error: skipped
+        self.assertEqual(r.context['list_label'], '1 из 2 · ИИ: ошибка')
+        self.assertContains(r, f'{self.b.get_absolute_url()}?ai=error')
+        self.assertContains(r, '?day=2026-09-25&ai=error')  # back to the same list
+
+    def test_sort_order_is_followed(self):
+        r, prev, nxt = self.nav(self.b, sort='-time')
+        self.assertEqual((prev, nxt), (None, self.a))
+        self.assertIn('по времени ↓', r.context['list_label'])
+
+    def test_ctrl_enter_goes_to_next_unreviewed_in_the_list(self):
+        CallReview.objects.create(audio=self.b, completed=True)
+        url = reverse('player:review_save', args=[self.c.pk]) + '?ai=error'
+        r = self.client.post(url, {'complete': '1', 'review_date': '2026-09-25'})
+        self.assertIsNone(r.json()['next_url'])  # B is reviewed, A is not in «ИИ: ошибка»
+        r = self.client.post(reverse('player:review_save', args=[self.c.pk]),
+                             {'complete': '1', 'review_date': '2026-09-25'})
+        self.assertEqual(r.json()['next_url'], self.a.get_absolute_url())  # whole day by time
+
+    def test_table_links_carry_the_list(self):
+        r = self.client.get(reverse('player:index'), {'day': '2026-09-25', 'ai': 'error', 'sort': 'interviewer'})
+        self.assertContains(r, f'{self.c.get_absolute_url()}?sort=interviewer&amp;ai=error')
+
+    def test_call_left_the_filter_falls_back_to_the_day(self):
+        r, prev, nxt = self.nav(self.a, ai='error')  # A is not in the list any more
+        self.assertEqual((prev, nxt), (self.c, self.b))
+        self.assertEqual(r.context['list_query'], '')

@@ -1,7 +1,7 @@
 <aside class="card review" aria-labelledby="review-title">
   {% with f=review_form %}
-  <form id="review-form" method="post" action="{% url 'player:review_save' audio.pk %}"
-        data-next-url="{% if next_unreviewed %}{{ next_unreviewed.get_absolute_url }}{% endif %}">
+  <form id="review-form" method="post" action="{{ save_url|default:'' }}{% if not save_url %}{% url 'player:review_save' audio.pk %}{% endif %}"
+        data-next-url="{{ next_unreviewed_url|default:'' }}">
     {% csrf_token %}
     <div class="review-head">
       <h2 id="review-title">Контроль</h2>
