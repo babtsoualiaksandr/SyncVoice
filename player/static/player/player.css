@@ -654,3 +654,16 @@ table.stations .errorlist { font-size: 0.8rem; }
 
 .call-position { font-size: 0.8rem; color: var(--muted); white-space: nowrap; padding: 0 4px; }
 .step-spare { margin-left: 2px; font-size: 0.65rem; color: var(--warn); font-weight: 600; }
+
+/* Phone / name search: in the top bar on every page, and the results page */
+.topbar-search { margin-left: auto; }
+.topbar-search input {
+  width: 15rem; max-width: 40vw; padding: 5px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: 0.9rem;
+}
+.topbar-search input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.search-form { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.search-form input {
+  flex: 1 1 260px; max-width: 420px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit;
+}

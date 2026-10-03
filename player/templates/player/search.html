@@ -1,0 +1,54 @@
+{% extends 'player/base.html' %}
+
+{% block title %}Поиск{% if query %}: {{ query }}{% endif %} — SyncVoice{% endblock %}
+{% block page_class %}page-wide{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h2>{% if query %}Поиск «{{ query }}»{% else %}Поиск звонка{% endif %}</h2>
+  </div>
+  <form class="search-form" method="get" action="{% url 'player:search' %}" role="search">
+    <input type="search" name="q" value="{{ query }}" autofocus placeholder="+375 (29) 123-45-67, 80291234567, 4567 или имя">
+    <button class="btn btn-primary" type="submit">Найти</button>
+  </form>
+  <p class="hint">Номер в любом виде или последние цифры (от трёх); буквы — поиск по имени респондента из анкеты CRM.
+    Один найденный звонок открывается сразу.</p>
+
+  {% if too_short %}
+    <p class="hint">Введите хотя бы три цифры номера.</p>
+  {% elif query and not calls %}
+    <p>Звонков не найдено.</p>
+  {% elif calls %}
+    <p class="hint">Найдено: {{ calls|length }}{% if more %} — показаны первые {{ calls|length }}, уточните номер{% endif %}.</p>
+    <div class="table-wrap">
+      <table class="calls">
+        <thead>
+          <tr><th>Дата</th><th>Время</th><th>Телефон</th><th>Респондент</th><th>Интервьюер</th><th>Длит.</th>
+              <th>Обработка</th><th>Город (ИИ)</th><th>ИИ</th><th>Контроль</th></tr>
+        </thead>
+        <tbody>
+          {% for audio in calls %}
+            <tr class="{% if audio.review.completed %}is-reviewed{% endif %}">
+              <td class="num">{% if audio.call_started_at %}<a href="{% url 'player:index' %}?day={{ audio.call_started_at|date:'Y-m-d' }}" title="Все звонки этого дня">{{ audio.call_started_at|date:"d.m.Y" }}</a>{% endif %}</td>
+              <td class="num">{{ audio.call_started_at|time:"H:i:s" }}</td>
+              <td><a href="{{ audio.get_absolute_url }}">{{ audio.phone_display|default:audio }}</a></td>
+              <td>{{ audio.respondent|default:"" }}</td>
+              <td>{{ audio.interviewer_label }}</td>
+              <td class="num">{% if audio.duration %}{{ audio.duration|floatformat:0 }} с{% endif %}</td>
+              <td class="steps">{% for step in audio.steps %}<span class="step step-{{ step.state }}" title="{{ step.title }}">{{ step.label }} {{ step.mark }}{% if step.spare %}<sup class="step-spare">зап.</sup>{% endif %}</span>{% endfor %}</td>
+              <td>{{ audio.ai_city }}</td>
+              <td>{% if audio.ai_verdict %}<span class="chip verdict-{{ audio.ai_verdict.key }}" title="{{ audio.ai_verdict.title }}">{{ audio.ai_verdict.label }}{% if audio.ai_verdict.count > 1 %} ×{{ audio.ai_verdict.count }}{% endif %}</span>{% else %}<span class="hint">—</span>{% endif %}</td>
+              <td>
+                {% if audio.review.completed %}
+                  <span class="result result-{{ audio.review.result|default:'none' }}">{{ audio.review.result|default:"проверен" }}</span>
+                {% elif audio.review %}<span class="hint">черновик</span>{% else %}<span class="hint">—</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

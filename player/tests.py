@@ -2423,3 +2423,45 @@ class MonthFilterTests(TestCase):
         r = self.page(day='2026-09-25', sort='interviewer', ai='none')[5]
         self.assertContains(r, 'href="?day=2026-09-26&sort=interviewer&amp;ai=none"', html=False)  # day tab
         self.assertContains(r, 'href="?day=2026-09-25&sort=interviewer&ai=none"', html=False)  # AI chip
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class SearchTests(TestCase):
+    """Find a call by phone number in any form (or the respondent's name) from any page."""
+
+    def setUp(self):
+        self.a = make_call(CALL_A, status=AudioFile.Status.DONE)  # 375290000103, 25.09
+        self.again = make_call('out-375290000103-308-20260928-100000-1790000009.109.wav', status=AudioFile.Status.DONE)
+        self.b = make_call(CALL_B, status=AudioFile.Status.DONE)  # 375290000104
+        CallComparison.objects.create(audio=self.b, status='done', respondent_name='Мария')
+
+    def search(self, q):
+        return self.client.get(reverse('player:search'), {'q': q})
+
+    def test_normalize(self):
+        from .views import normalize_phone_query as norm
+        self.assertEqual(norm('+375 (29) 000-01-03'), '290000103')
+        self.assertEqual(norm('80290000103'), '290000103')
+        self.assertEqual(norm('290000103'), '290000103')
+        self.assertEqual(norm('01-03'), '0103')
+
+    def test_one_call_opens_the_player(self):
+        self.assertRedirects(self.search('+375 (29) 000-01-04'), self.b.get_absolute_url())
+        self.assertRedirects(self.search('80290000104'), self.b.get_absolute_url())
+
+    def test_several_calls_are_listed_newest_first(self):
+        r = self.search('29 000 01 03')
+        self.assertEqual([a.pk for a in r.context['calls']], [self.again.pk, self.a.pk])
+        self.assertContains(r, self.a.get_absolute_url())
+        self.assertContains(r, 'value="29 000 01 03"')  # kept in the top-bar box
+
+    def test_last_digits_and_name(self):
+        self.assertEqual(len(self.search('0103').context['calls']), 2)
+        self.assertRedirects(self.search('мари'), self.b.get_absolute_url())
+        self.assertTrue(self.search('12').context['too_short'])
+        self.assertContains(self.search('999999999'), 'Звонков не найдено')
+
+    def test_search_box_on_every_page(self):
+        for url in (reverse('player:index'), self.a.get_absolute_url(), reverse('player:settings')):
+            with self.subTest(url=url):
+                self.assertContains(self.client.get(url), 'class="topbar-search"')

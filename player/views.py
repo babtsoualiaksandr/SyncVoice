@@ -163,6 +163,51 @@ def index(request, upload_form=None):
     })
 
 
+SEARCH_LIMIT = 200
+
+
+def normalize_phone_query(query: str) -> str:
+    """Digits of a typed phone: «+375 (29) 513-16-65», «80295131665», «295131665» → the part to look for."""
+    digits = re.sub(r'\D', '', query)
+    if digits.startswith('80') and len(digits) == 11:  # Belarusian «8 0xx …» form
+        digits = '375' + digits[2:]
+    return digits[-9:] if len(digits) >= 9 else digits  # the operator code and number, without 375
+
+
+def find_calls(query: str):
+    """Calls of any day whose phone ends with / contains the typed digits, or whose respondent's
+    name (from the CRM) contains the typed letters. Newest first."""
+    query = query.strip()
+    calls = AudioFile.objects.select_related('review', 'analysis', 'comparison').order_by('-call_started_at')
+    digits = normalize_phone_query(query)
+    if re.search(r'[^\W\d_]', query):  # letters: a name (SQLite ignores case only for Latin — compare here)
+        needle = query.casefold()
+        names = CallComparison.objects.exclude(respondent_name='').values_list('audio_id', 'respondent_name')
+        return calls.filter(pk__in=[pk for pk, name in names if needle in name.casefold()])
+    if len(digits) >= 9:
+        return calls.filter(phone__endswith=digits)
+    if len(digits) >= 3:
+        return calls.filter(phone__contains=digits)
+    return calls.none()
+
+
+@require_GET
+def search(request):
+    """Calls by phone number (or respondent name); a single call opens its listening page at once."""
+    query = request.GET.get('q', '').strip()
+    found = list(find_calls(query)[:SEARCH_LIMIT + 1]) if query else []
+    if len(found) == 1:
+        return redirect(found[0].get_absolute_url())
+    calls = stats.label_calls(found[:SEARCH_LIMIT])
+    return render(request, 'player/search.html', {
+        'query': query,
+        'search_query': query,
+        'calls': calls,
+        'more': len(found) > SEARCH_LIMIT,
+        'too_short': bool(query) and not re.search(r'[^\W\d_]', query) and len(normalize_phone_query(query)) < 3,
+    })
+
+
 @require_POST
 def upload(request):
     form = AudioUploadForm(request.POST, request.FILES)

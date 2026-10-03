@@ -15,6 +15,10 @@
       <a href="{% url 'player:stations' %}">Радиостанции</a>
       <a href="{% url 'player:settings' %}">Настройки</a>
     </nav>
+    <form class="topbar-search" method="get" action="{% url 'player:search' %}" role="search">
+      <input type="search" name="q" value="{{ search_query|default:'' }}" placeholder="Номер телефона или имя"
+             aria-label="Найти звонок по номеру телефона или имени респондента" title="Найти звонок: номер в любом виде, последние цифры или имя респондента. Клавиша «/» — сюда">
+    </form>
   </header>
   <main class="page {% block page_class %}{% endblock %}">
     {% if messages %}
@@ -24,6 +28,14 @@
     {% endif %}
     {% block content %}{% endblock %}
   </main>
+  <script>
+    // «/» — to the search box (not while typing in a field).
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, textarea, select, [contenteditable]')) return;
+      const box = document.querySelector('.topbar-search input');
+      if (box) { e.preventDefault(); box.focus(); box.select(); }
+    });
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
