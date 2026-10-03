@@ -6,16 +6,18 @@ listening, the review form stays editable.
 """
 import hashlib
 import logging
+import time as time_module
 from datetime import datetime, time, timedelta, timezone as dt_timezone
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 from pydantic import BaseModel, Field
 
 from . import stations as station_directory
-from .models import AppSettings, AudioFile, CallAnalysis, GeminiQuota
+from .models import AppSettings, AudioFile, CallAnalysis, GeminiPace, GeminiQuota
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +279,42 @@ def transcript_text(audio: AudioFile) -> str:
     )
 
 
+MAX_PACE_WAIT = 30  # seconds; a longer queue to the model — the call waits in SyncVoice's queue instead
+
+
+def requests_per_minute(name: str) -> float:
+    """GEMINI_RPM from .env, else 80 % of the free tier: 12 for «…-lite» models, 4 for the others."""
+    value = str(settings.GEMINI_RPM).strip()
+    if value:
+        return max(float(value), 0)
+    return 12 if 'lite' in name else 4
+
+
+def wait_for_slot(name: str) -> None:
+    """Keep every process (worker, commands, the settings page) under the model's per-minute limit.
+
+    Reserves the model's next free slot in the database and sleeps until it;
+    a slot further than MAX_PACE_WAIT away is not taken — RetryLater instead.
+    """
+    rpm = requests_per_minute(name)
+    if not rpm:
+        return
+    interval = timedelta(seconds=60 / rpm)
+    with transaction.atomic():  # SQLite: an immediate transaction — one process at a time
+        now = timezone.now()
+        pace, _ = GeminiPace.objects.get_or_create(model=name, defaults={'next_slot_at': now})
+        slot = max(now, pace.next_slot_at)
+        wait = (slot - now).total_seconds()
+        if wait > MAX_PACE_WAIT:
+            raise RetryLater(f'Очередь запросов к {name}: следующий через {wait:.0f} с '
+                             f'(не больше {rpm:g} в минуту).')
+        pace.next_slot_at = slot + interval
+        pace.save(update_fields=['next_slot_at'])
+    if wait > 0:
+        logger.info('Gemini %s: waiting %.1f s to stay under %g requests a minute', name, wait, rpm)
+        time_module.sleep(wait)
+
+
 def is_unknown_model(exc) -> bool:
     """400 «unexpected model name format» or 404 «models/… is not found»."""
     message = (exc.message or '').casefold()
@@ -296,6 +334,7 @@ def generate(system: str, contents: str, schema, client=None, model: str | None 
     from google.genai import errors, types
 
     client = client or make_client()
+    wait_for_slot(model or DEFAULT_MODEL)
     try:
         response = client.models.generate_content(
             model=model or DEFAULT_MODEL,

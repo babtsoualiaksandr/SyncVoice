@@ -10,7 +10,7 @@ from django.utils.html import format_html, format_html_join
 
 from . import analysis, compare, stats
 from .models import (
-    AppSettings, AudioFile, CallAnalysis, CallComparison, CallReview, GeminiQuota, Interviewer, PbxSync,
+    AppSettings, AudioFile, CallAnalysis, CallComparison, CallReview, GeminiPace, GeminiQuota, Interviewer, PbxSync,
     RadioStation, Segment,
 )
 
@@ -342,6 +342,18 @@ class GeminiQuotaAdmin(CreatedByAppMixin, admin.ModelAdmin):
     def reset(self, request, queryset):
         count, _ = queryset.delete()
         self.message_user(request, f'Отметка снята: {count}.', messages.SUCCESS)
+
+
+@admin.register(GeminiPace)
+class GeminiPaceAdmin(CreatedByAppMixin, admin.ModelAdmin):
+    """Read-only: when the next request to each model may go (see analysis.wait_for_slot)."""
+    list_display = ['model', 'next_slot_at', 'per_minute']
+    readonly_fields = ['model', 'next_slot_at']
+
+    @admin.display(description='запросов в минуту')
+    def per_minute(self, obj):
+        rpm = analysis.requests_per_minute(obj.model)
+        return f'{rpm:g}' if rpm else 'без ограничения'
 
 
 @admin.register(AppSettings)

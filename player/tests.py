@@ -34,6 +34,9 @@ from . import pbx
 from .pbx import FreePbxClient, PbxError, Recording, parse_cdr_html
 from .sync import run_sync
 
+# No pacing between the fake Gemini calls (PacingTests turns it on).
+override_settings(GEMINI_RPM='0').enable()
+
 MEDIA_ROOT = tempfile.mkdtemp()
 DATA = bytes(range(256)) * 40  # 10240 bytes
 
@@ -2256,3 +2259,41 @@ class ListNavigationTests(TestCase):
         r, prev, nxt = self.nav(self.a, ai='error')  # A is not in the list any more
         self.assertEqual((prev, nxt), (self.c, self.b))
         self.assertEqual(r.context['list_query'], '')
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-lite-test', GEMINI_RPM='')
+class PacingTests(TestCase):
+    """Requests to one model are spaced out across all processes (via the database)."""
+
+    def test_default_rates(self):
+        self.assertEqual(analysis.requests_per_minute('gemini-3.1-flash-lite'), 12)
+        self.assertEqual(analysis.requests_per_minute('gemini-3.8-flash'), 4)
+        with override_settings(GEMINI_RPM='6'):
+            self.assertEqual(analysis.requests_per_minute('gemini-3.1-flash-lite'), 6)
+        with override_settings(GEMINI_RPM='0'):
+            self.assertEqual(analysis.requests_per_minute('gemini-3.1-flash-lite'), 0)
+
+    def test_second_request_waits_for_its_slot(self):
+        with mock.patch('player.analysis.time_module.sleep') as sleep:
+            analysis.wait_for_slot('gemini-3.1-flash-lite')
+            sleep.assert_not_called()
+            analysis.wait_for_slot('gemini-3.1-flash-lite')
+            self.assertAlmostEqual(sleep.call_args.args[0], 5, delta=0.5)  # 60 / 12
+            analysis.wait_for_slot('gemini-other-lite')  # each model has its own pace
+            self.assertEqual(sleep.call_count, 1)
+
+    def test_long_queue_is_retried_later(self):
+        from .models import GeminiPace
+        GeminiPace.objects.create(model='gemini-3.8-flash', next_slot_at=timezone.now() + timezone.timedelta(minutes=2))
+        with mock.patch('player.analysis.time_module.sleep') as sleep, \
+                self.assertRaisesMessage(analysis.RetryLater, 'Очередь запросов'):
+            analysis.wait_for_slot('gemini-3.8-flash')
+        sleep.assert_not_called()
+
+    def test_generate_is_paced(self):
+        audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=audio, index=0, start=1, end=2, text='Минск.')
+        with mock.patch('player.analysis.time_module.sleep') as sleep:
+            for _ in range(2):
+                analysis.suggest_fields(audio, FakeGemini(SUGGESTION))
+        self.assertEqual(sleep.call_count, 1)

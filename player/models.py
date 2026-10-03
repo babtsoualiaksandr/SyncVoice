@@ -148,6 +148,19 @@ class GeminiQuota(models.Model):
         return f'{self.model} до {self.exhausted_until:%d.%m %H:%M}'
 
 
+class GeminiPace(models.Model):
+    """When the next request to a Gemini model may go: keeps every process under its per-minute limit."""
+    model = models.CharField('модель', max_length=64, unique=True)
+    next_slot_at = models.DateTimeField('следующий запрос не раньше')
+
+    class Meta:
+        verbose_name = 'темп запросов Gemini'
+        verbose_name_plural = 'темп запросов Gemini'
+
+    def __str__(self):
+        return self.model
+
+
 class PbxSync(models.Model):
     """A request to download one day's recordings from the PBX (run by the worker)."""
 

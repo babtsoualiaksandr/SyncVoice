@@ -6,7 +6,7 @@ from django.contrib.admin.apps import AdminConfig
 SECTIONS = [
     ('Звонки', ['AudioFile', 'CallReview', 'CallAnalysis', 'CallComparison', 'Segment']),
     ('Справочники', ['Interviewer', 'RadioStation']),
-    ('Система', ['PbxSync', 'GeminiQuota', 'AppSettings']),
+    ('Система', ['PbxSync', 'GeminiQuota', 'GeminiPace', 'AppSettings']),
 ]
 
 
