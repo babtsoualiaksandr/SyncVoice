@@ -26,6 +26,8 @@ def _retry(fn, log):
     for delay in (*RETRY_DELAYS, None):
         try:
             return fn()
+        except analysis.DailyLimit:
+            raise  # waiting does not help: the next model (--model a,b) or tomorrow
         except analysis.RetryLater as exc:
             if delay is None:
                 raise
@@ -38,6 +40,24 @@ def _same(ai: str, controller: str) -> bool:
     def norm(value):
         return sorted(p.strip().casefold() for p in (value or '').split(',') if p.strip())
     return norm(ai) == norm(controller)
+
+
+def _ai_error(audio) -> bool:
+    saved = getattr(audio, 'comparison', None)
+    return bool(saved and saved.status == 'done' and any(d.get('severity') == 'ошибка' for d in saved.discrepancies))
+
+
+def _controller_error(audio) -> bool:
+    review = getattr(audio, 'review', None)
+    return bool(review and (review.has_errors or review.result in ('ошибка', 'брак')))
+
+
+def _severity_mark(items) -> str:
+    """«ошибка ×2» / «проверить» / «рекомендация» / «ок» — the worst item of a survey check."""
+    for severity in ('ошибка', 'проверить', 'рекомендация'):
+        if count := sum(d.get('severity') == severity for d in items):
+            return f'{severity} ×{count}' if count > 1 else severity
+    return 'ок'
 
 
 def _mark(ai: str, controller: str) -> str:
@@ -53,18 +73,23 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--day', help='Только звонки этого дня, ГГГГ-ММ-ДД')
         parser.add_argument('--ids', help='Номера звонков через запятую (как в адресе /audio/<номер>/)')
-        parser.add_argument('--limit', type=int, default=15, help='Сколько звонков (по умолчанию 15)')
+        parser.add_argument('--limit', type=int, help='Сколько звонков (по умолчанию 15, с --errors — все)')
+        parser.add_argument('--errors', action='store_true',
+                            help='Только звонки, где ошибку нашёл ИИ (сохранённая сверка) или контролёр')
         parser.add_argument('--all', action='store_true',
                             help='Брать и звонки, которые контролёр ещё не проверил')
         parser.add_argument('--rerun', action='store_true',
                             help='Заново спросить Gemini с текущими промптами (тратит токены), '
                                  'показать рядом с сохранённым ответом')
         parser.add_argument('--model', help='С --rerun: другая модель Gemini для подсказки и сверки, '
-                                            'например gemini-3.8-flash')
+                                            'например gemini-3.8-flash. Можно несколько через запятую: '
+                                            'когда у одной кончается дневной лимит, берётся следующая')
+        parser.add_argument('--compare-only', action='store_true',
+                            help='С --rerun: заново только сверку анкеты (вдвое меньше запросов)')
         parser.add_argument('--no-crm', action='store_true', help='Не запрашивать анкеты в CRM')
         parser.add_argument('--out', help='Куда записать файл (по умолчанию media/prompt_review/)')
 
-    def handle(self, day, ids, limit, all, rerun, model, no_crm, out, **options):
+    def handle(self, day, ids, limit, errors, all, rerun, model, compare_only, no_crm, out, **options):
         calls = (
             AudioFile.objects.filter(status=AudioFile.Status.DONE)
             .select_related('review', 'analysis', 'comparison').order_by('call_started_at')
@@ -80,14 +105,20 @@ class Command(BaseCommand):
             calls = calls.filter(call_started_at__date=parsed)
         if not all and not ids:
             calls = calls.filter(review__completed=True)
-        calls = list(calls[:limit])
+        if errors:
+            calls = [a for a in calls if _ai_error(a) or _controller_error(a)]
+        calls = list(calls[:limit or (None if errors else 15)])
         if not calls:
             raise CommandError('Нет подходящих звонков. Проверенных контролёром нет? Добавьте --all.')
         if rerun and not analysis.enabled():
             raise CommandError('Для --rerun нужен GEMINI_API_KEY в .env')
-        if model and not rerun:
-            raise CommandError('--model работает только вместе с --rerun')
-        self.model = model  # this run only: suggestions and the survey check both use it
+        if (model or compare_only) and not rerun:
+            raise CommandError('--model и --compare-only работают только вместе с --rerun')
+        # This run only: suggestions and the survey check use these, in turn as daily limits run out.
+        self.models = [analysis.clean_model(m) for m in (model or '').split(',') if analysis.clean_model(m)]
+        self.model = self.models[0] if self.models else None
+        self.compare_only = compare_only
+        self.summary = []
         self.versions = {
             'analysis': analysis.prompt_version(analysis.system_prompt()),
             'compare': analysis.prompt_version(compare.system_prompt()),
@@ -114,6 +145,11 @@ class Command(BaseCommand):
             self.stdout.write(f'#{audio.pk} …')
             lines += self._call(audio, crm_client, gemini, totals, tokens)
 
+        if rerun:
+            lines[4:4] = [
+                '| Звонок | Внутр. | Контролёр | ИИ сохранённый | ИИ заново | Модель |', '|---|---|---|---|---|---|',
+                *self.summary, '',
+            ]
         lines[4:4] = [
             f'Совпадения ИИ с контролёром (из {totals["calls"]} проверенных): '
             f'город {totals["city"]}, радиостанции {totals["stations"]}.',
@@ -168,9 +204,9 @@ class Command(BaseCommand):
         if review and review.note:
             out += [f'Примечание контролёра: {review.note}', '']
 
-        if gemini:
+        if gemini and not self.compare_only:
             try:
-                fields, usage = _retry(lambda: analysis.suggest_fields(audio, gemini, model_override=self.model), self.stdout.write)
+                fields, usage = self._ask(lambda: analysis.suggest_fields(audio, gemini, model_override=self.model))
                 tokens[0] += usage['input_tokens']
                 tokens[1] += usage['output_tokens']
                 out += [
@@ -206,19 +242,44 @@ class Command(BaseCommand):
             out += [f'Сохранённая: {saved.get_status_display()} {saved.error}'.strip(), '']
         else:
             out += ['Сохранённой сверки нет.', '']
+        rerun_mark = '—'
         if gemini and answers:
             try:
-                result, usage = _retry(lambda: compare.check(audio, answers, gemini, model_override=self.model),
-                                       self.stdout.write)
+                result, usage = self._ask(lambda: compare.check(audio, answers, gemini, model_override=self.model))
                 tokens[0] += usage['input_tokens']
                 tokens[1] += usage['output_tokens']
-                out += self._discrepancies('Заново (текущий промпт)', result.summary, compare.clean(result))
+                items = compare.clean(result)
+                rerun_mark = _severity_mark(items)
+                out += self._discrepancies(f'Заново ({usage["model"]}, текущий промпт)', result.summary, items)
                 out += ['<details><summary>Разбор модели по полям</summary>', '', result.review, '', '</details>', '']
             except (analysis.AnalysisError, analysis.RetryLater) as exc:
                 out += [f'Сверка заново: ошибка — {exc}', '']
 
+        if gemini:
+            self.summary.append(
+                f'| #{audio.pk} {f"{when:%H:%M}" if when else ""} | {audio.operator or "?"} | '
+                f'{"ошибка" if _controller_error(audio) else (review.result if review and review.result else "—")} | '
+                f'{_severity_mark(saved.discrepancies) if saved and saved.status == "done" else "—"} | '
+                f'{rerun_mark} | {self.model or "по настройкам"} |'
+            )
         out += ['### Расшифровка', '', '```', analysis.transcript_text(audio), '```', '']
         return out
+
+    def _ask(self, fn):
+        """fn() with retries; with --model a,b,c — on a spent daily limit the next model is used."""
+        while True:
+            if self.models:
+                spent = analysis.exhausted_models()
+                self.model = next((m for m in self.models if m not in spent), None)
+                if self.model is None:
+                    raise analysis.DailyLimit('У всех моделей из --model исчерпан дневной лимит.')
+            try:
+                return _retry(fn, self.stdout.write)
+            except analysis.DailyLimit:
+                if not self.models:
+                    raise
+                analysis.mark_exhausted(self.model)
+                self.stdout.write(f'    {self.model}: дневной лимит исчерпан, беру следующую модель')
 
     def _version(self, item, kind):
         """« (модель, промпт abc123 — текущий)» for a saved AI answer."""

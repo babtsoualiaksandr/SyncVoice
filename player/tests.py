@@ -2150,7 +2150,7 @@ class AdminTests(TestCase):
 
     def setUp(self):
         from django.contrib.auth import get_user_model
-        self.client.force_login(get_user_model().objects.create_superuser('admin-test', 'a@example.com', 'x'))
+        self.client.force_login(get_user_model().objects.create_superuser('admin-test', 'a@example.com', None))
         self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
         Segment.objects.create(audio=self.audio, index=0, start=1, end=2, text='Минск.')
         CallReview.objects.create(audio=self.audio, result='ок', completed=True)
@@ -2268,6 +2268,7 @@ class PacingTests(TestCase):
     def test_default_rates(self):
         self.assertEqual(analysis.requests_per_minute('gemini-3.1-flash-lite'), 12)
         self.assertEqual(analysis.requests_per_minute('gemini-3.8-flash'), 4)
+        self.assertEqual(analysis.requests_per_minute('gemini-2.5-flash-lite'), 8)  # its limit is 10
         with override_settings(GEMINI_RPM='6'):
             self.assertEqual(analysis.requests_per_minute('gemini-3.1-flash-lite'), 6)
         with override_settings(GEMINI_RPM='0'):
@@ -2297,3 +2298,52 @@ class PacingTests(TestCase):
             for _ in range(2):
                 analysis.suggest_fields(audio, FakeGemini(SUGGESTION))
         self.assertEqual(sleep.call_count, 1)
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT, GEMINI_API_KEY='test-key', GEMINI_MODEL='gemini-test')
+class PromptReviewMeasureTests(TestCase):
+    """prompt_review for measuring a stronger model: --errors, --compare-only, --model a,b."""
+
+    def setUp(self):
+        AppSettings.objects.update_or_create(pk=1, defaults={'crm_url': 'http://crm.local', 'crm_username': 'sv'})
+        error = [{'field': 'Возраст', 'survey_value': '59', 'call_value': '57', 'severity': 'ошибка',
+                  'time': '0:31', 'comment': ''}]
+        self.ai_error = make_call(CALL_A, status=AudioFile.Status.DONE)
+        CallComparison.objects.create(audio=self.ai_error, status='done', discrepancies=error)
+        CallReview.objects.create(audio=self.ai_error, completed=True, result='ок')
+        self.mine = make_call(CALL_B, status=AudioFile.Status.DONE)  # the controller's error, AI clean
+        CallComparison.objects.create(audio=self.mine, status='done', discrepancies=[])
+        CallReview.objects.create(audio=self.mine, completed=True, result='ошибка', has_errors=True)
+        clean = make_call(CALL_C, status=AudioFile.Status.DONE)
+        CallComparison.objects.create(audio=clean, status='done', discrepancies=[])
+        CallReview.objects.create(audio=clean, completed=True, result='ок')
+        for audio in AudioFile.objects.all():
+            Segment.objects.create(audio=audio, index=0, start=1, end=2, text='Минск.')
+        self.out = Path(MEDIA_ROOT) / 'prompt_review' / 'measure.md'
+
+    def run_command(self, *args, gemini=None):
+        from django.core.management import call_command
+        crm_client = mock.Mock()
+        crm_client.find.return_value = [crm.parse_survey(CRM_FIND[1])]
+        with mock.patch('player.crm.get_client', return_value=crm_client), \
+                mock.patch('player.crm.fetch_answers', return_value={'Профиль': {'Возраст': '59'}}), \
+                mock.patch('player.analysis.make_client', return_value=gemini or FakeGemini(None)):
+            call_command('prompt_review', '--out', str(self.out), *args, stdout=io.StringIO())
+        return self.out.read_text(encoding='utf-8')
+
+    def test_errors_takes_ai_and_controller_errors(self):
+        text = self.run_command('--errors')
+        self.assertEqual(text.count('## Звонок #'), 2)
+        self.assertIn(f'## Звонок #{self.ai_error.pk}', text)
+        self.assertIn(f'## Звонок #{self.mine.pk}', text)
+
+    def test_compare_only_with_model_rotation(self):
+        verdict = compare_module.Comparison(review='', summary='Расхождений нет.', discrepancies=[])
+        gemini = PerModelGemini(verdict, spent={'gemini-a'})
+        text = self.run_command('--errors', '--rerun', '--compare-only', '--model', 'gemini-a, gemini-b', gemini=gemini)
+        self.assertEqual({c['model'] for c in gemini.calls}, {'gemini-a', 'gemini-b'})
+        self.assertEqual(sum(c['model'] == 'gemini-a' for c in gemini.calls), 1)  # spent once, then skipped
+        self.assertNotIn('Расшифровка звонка', ''.join(c['contents'][:30] for c in gemini.calls))  # no suggestion rerun
+        self.assertIn('| Звонок | Внутр. | Контролёр | ИИ сохранённый | ИИ заново | Модель |', text)
+        self.assertIn('| ошибка | ок | ок | gemini-b |', text)  # the controller's error call
+        self.assertIn('| ок | ошибка | ок | gemini-b |', text)  # the AI's error the strong model drops

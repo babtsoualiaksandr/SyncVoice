@@ -222,7 +222,7 @@ def generate_any(system: str, contents: str, schema, client, models: list[str]):
             continue
         return parsed, usage, name
     back = min(spent.values())
-    raise RetryLater(
+    raise DailyLimit(
         f'Дневной лимит Gemini исчерпан: {", ".join(models)}. '
         f'Продолжу с {timezone.localtime(back):%d.%m %H:%M} или добавьте запасную модель в настройках.'
     )
@@ -282,12 +282,22 @@ def transcript_text(audio: AudioFile) -> str:
 MAX_PACE_WAIT = 30  # seconds; a longer queue to the model — the call waits in SyncVoice's queue instead
 
 
+# Free-tier requests per minute (AI Studio → Rate limit). Not listed: 10 for «…-lite», 5 for the rest.
+FREE_TIER_RPM = {
+    'gemini-3.1-flash-lite': 15,
+    'gemini-3.5-flash-lite': 15,
+    'gemini-2.5-flash-lite': 10,
+}
+PACE_SHARE = 0.8  # use 80 % of the limit: other tools on the same key, clock drift
+
+
 def requests_per_minute(name: str) -> float:
-    """GEMINI_RPM from .env, else 80 % of the free tier: 12 for «…-lite» models, 4 for the others."""
+    """GEMINI_RPM from .env, else 80 % of the model's free-tier limit (12 for 3.x Flash Lite, 4 for Flash)."""
     value = str(settings.GEMINI_RPM).strip()
     if value:
         return max(float(value), 0)
-    return 12 if 'lite' in name else 4
+    limit = FREE_TIER_RPM.get(name) or (10 if 'lite' in name else 5)
+    return int(limit * PACE_SHARE)
 
 
 def wait_for_slot(name: str) -> None:

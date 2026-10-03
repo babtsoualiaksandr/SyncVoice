@@ -182,8 +182,8 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', '')
 # Survey check against the CRM (harder reasoning); empty — the same as GEMINI_MODEL.
 GEMINI_COMPARE_MODEL = os.environ.get('GEMINI_COMPARE_MODEL', '')
-# Requests per minute per model, shared by all SyncVoice processes. Empty — 12 for «…-lite» models,
-# 4 for the others (80 % of the free tier's 15 / 5); 0 — no pacing.
+# Requests per minute per model, shared by all SyncVoice processes. Empty — 80 % of the model's
+# free-tier limit (player.analysis.FREE_TIER_RPM: 12 for 3.x Flash Lite, 8 for 2.5 Flash Lite, 4 for Flash); 0 — no pacing.
 GEMINI_RPM = os.environ.get('GEMINI_RPM', '')
 GEMINI_PROXY_URL = os.environ.get('GEMINI_PROXY_URL', '')  # e.g. http://1.2.3.4:3128
 GEMINI_PROXY_USERNAME = os.environ.get('GEMINI_PROXY_USERNAME', '')
