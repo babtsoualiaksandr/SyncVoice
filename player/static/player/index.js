@@ -88,13 +88,18 @@
   }
 }
 
-// Year / month filter: go to the latest downloaded day of the chosen period.
+// Year / month filter: go to the latest downloaded day of the chosen period, keeping the sort and AI filter.
 {
   const form = document.getElementById('period-filter');
   if (form) {
     for (const select of form.querySelectorAll('select')) {
       select.addEventListener('change', () => {
-        window.location.search = `?${select.dataset.param}=${encodeURIComponent(select.value)}`;
+        const current = new URLSearchParams(window.location.search);
+        const next = new URLSearchParams({ [select.dataset.param]: select.value });
+        for (const keep of ['sort', 'ai']) {
+          if (current.get(keep)) next.set(keep, current.get(keep));
+        }
+        window.location.search = `?${next}`;
       });
     }
   }

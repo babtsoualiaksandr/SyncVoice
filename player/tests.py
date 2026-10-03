@@ -2384,3 +2384,42 @@ class ModelShownTests(TestCase):
         self.assertIn(now['analysis']['wait'], (3, 4))
         analysis.mark_exhausted('gemini-spare')
         self.assertIsNone(self.client.get(reverse('player:status')).json()['ai']['now']['analysis']['model'])
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class MonthFilterTests(TestCase):
+    """Year / month filter above the call table, across years, and the day still being downloaded."""
+
+    def setUp(self):
+        for i, stamp in enumerate(['20251215-100000', '20260110-100000', '20260820-100000',
+                                   '20260925-093215', '20260926-093215']):
+            make_call(f'out-37529000020{i}-308-{stamp}-17900001{i}.20{i}.wav', status=AudioFile.Status.DONE)
+
+    def page(self, **params):
+        r = self.client.get(reverse('player:index'), params)
+        cal = r.context['calendar']
+        return (r.context['day'], cal['years'], [m['value'] for m in cal['months']],
+                [m['value'] for m in cal['months'] if m['selected']], [d['day'] for d in cal['month_days']], r)
+
+    def test_month_and_year(self):
+        day, years, months, selected, tabs, _ = self.page(month='2026-08')
+        self.assertEqual((day, selected, tabs), (date(2026, 8, 20), ['2026-08'], [date(2026, 8, 20)]))
+        self.assertEqual((years, months), ([2026, 2025], ['2026-09', '2026-08', '2026-01']))
+        day, _, months, selected, _, _ = self.page(year='2025')
+        self.assertEqual((day, months, selected), (date(2025, 12, 15), ['2025-12'], ['2025-12']))
+
+    def test_unknown_month_shows_the_latest_day(self):
+        for month in ('2026-03', 'junk'):
+            self.assertEqual(self.page(month=month)[0], date(2026, 9, 26))
+
+    def test_day_being_downloaded_is_in_the_filter(self):
+        day, years, months, selected, tabs, _ = self.page(day='2027-01-02')  # new year, no calls yet
+        self.assertEqual((day, years[0], months, selected, tabs),
+                         (date(2027, 1, 2), 2027, ['2027-01'], ['2027-01'], [date(2027, 1, 2)]))
+        tabs = self.page(day='2026-09-27')[4]
+        self.assertEqual(tabs[0], date(2026, 9, 27))
+
+    def test_day_tabs_and_ai_chips_keep_the_sort(self):
+        r = self.page(day='2026-09-25', sort='interviewer', ai='none')[5]
+        self.assertContains(r, 'href="?day=2026-09-26&sort=interviewer&amp;ai=none"', html=False)  # day tab
+        self.assertContains(r, 'href="?day=2026-09-25&sort=interviewer&ai=none"', html=False)  # AI chip

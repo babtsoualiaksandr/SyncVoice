@@ -61,7 +61,7 @@
 
   <nav class="day-tabs" aria-label="Скачанные дни месяца">
     {% for d in calendar.month_days %}
-      <a href="?day={{ d.day|date:'Y-m-d' }}" class="{% if d.day == day %}active{% endif %}"
+      <a href="?day={{ d.day|date:'Y-m-d' }}{% if list_query %}&{{ list_query }}{% endif %}" class="{% if d.day == day %}active{% endif %}"
          title="Проверено {{ d.reviewed }} из {{ d.total }}, распознано {{ d.transcribed }}">
         <strong>{{ d.day|date:"d.m" }}</strong>
         <span>{{ d.reviewed }}/{{ d.total }}</span>
@@ -72,7 +72,7 @@
   <nav class="ai-filter" aria-label="Вывод ИИ">
     {% for f in ai_filters %}
       {% if f.count or not f.key %}
-        <a href="?day={{ day|date:'Y-m-d' }}{% if f.key %}&ai={{ f.key }}{% endif %}"
+        <a href="?day={{ day|date:'Y-m-d' }}{% if sort_query %}&{{ sort_query }}{% endif %}{% if f.key %}&ai={{ f.key }}{% endif %}"
            class="chip{% if f.key %} verdict-{{ f.key }}{% endif %}{% if f.key == ai_filter %} active{% endif %}">{{ f.label }} <span>{{ f.count }}</span></a>
       {% endif %}
     {% endfor %}

@@ -75,7 +75,13 @@ def _pick_day(days: list, params) -> tuple:
 
 
 def _calendar(days: list, day) -> dict:
-    """Year and month choices and the selected month's downloaded days, for the filter above the table."""
+    """Year and month choices and the selected month's downloaded days, for the filter above the table.
+
+    The shown day is always among them — also a day still being downloaded, with no calls yet.
+    """
+    if day and day not in {d['day'] for d in days}:
+        days = sorted([*days, {'day': day, 'total': 0, 'reviewed': 0, 'transcribed': 0}],
+                      key=lambda d: d['day'], reverse=True)
     years = sorted({d['day'].year for d in days}, reverse=True)
     months = {}
     for d in days:
@@ -140,6 +146,7 @@ def index(request, upload_form=None):
         'sort': sort,
         'columns': _sort_columns(day, sort, ai),
         'list_query': urlencode(_list_params({'sort': sort, 'ai': ai})),
+        'sort_query': urlencode(_list_params({'sort': sort})),
         'calendar': _calendar(days, day),
         'ai_filter': ai,
         'ai_filters': [{'key': k, 'label': label, 'count': ai_counts[k]} for k, label in AI_FILTERS],
