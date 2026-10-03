@@ -2139,3 +2139,66 @@ class CallListAiTests(TestCase):
         self.assertEqual(cal['years'], [2026])
         self.assertEqual([m['value'] for m in cal['months']], ['2026-09', '2026-08'])
         self.assertEqual([d['day'] for d in cal['month_days']], [date(2026, 9, 25)])  # August days not shown
+
+
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class AdminTests(TestCase):
+    """Every model is in the SyncVoice admin, grouped in sections, and its pages open."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        self.client.force_login(get_user_model().objects.create_superuser('admin-test', 'a@example.com', 'x'))
+        self.audio = make_call(CALL_A, status=AudioFile.Status.DONE)
+        Segment.objects.create(audio=self.audio, index=0, start=1, end=2, text='Минск.')
+        CallReview.objects.create(audio=self.audio, result='ок', completed=True)
+        CallAnalysis.objects.create(audio=self.audio, status='done', city='Минск')
+        CallComparison.objects.create(audio=self.audio, status='done', respondent_name='Мария', discrepancies=[
+            {'field': 'Возраст', 'survey_value': '59', 'call_value': '57', 'severity': 'ошибка', 'comment': ''}])
+        Interviewer.objects.create(extension='308', name='Марина')
+        RadioStation.objects.create(name='Радио Юнистар', frequencies={'Минск': '99.5'})
+        PbxSync.objects.create(day=date(2026, 9, 25))
+        analysis.mark_exhausted('gemini-test')
+
+    def test_index_sections_and_branding(self):
+        r = self.client.get(reverse('admin:index'))
+        self.assertContains(r, 'SyncVoice')
+        self.assertContains(r, 'player/admin.css')
+        sections = [app['name'] for app in r.context['app_list']]
+        self.assertEqual(sections[:3], ['Звонки', 'Справочники', 'Система'])
+        self.assertNotContains(r, 'Django')
+
+    def test_every_model_page_opens(self):
+        from django.apps import apps
+        for model in apps.get_app_config('player').get_models():
+            name = model._meta.model_name
+            with self.subTest(model=name):
+                r = self.client.get(reverse(f'admin:player_{name}_changelist'), follow=True)
+                self.assertEqual(r.status_code, 200)
+                obj = model.objects.first()
+                if obj:
+                    self.assertEqual(self.client.get(reverse(f'admin:player_{name}_change', args=[obj.pk])).status_code, 200)
+
+    def test_call_list_shows_badges(self):
+        r = self.client.get(reverse('admin:player_audiofile_changelist'))
+        self.assertContains(r, 'sv-verdict-error')
+        self.assertContains(r, 'Мария')
+        r = self.client.get(reverse('admin:player_callcomparison_change', args=[self.audio.comparison.pk]))
+        self.assertContains(r, 'sv-items')
+
+    def test_requeue_ai_action(self):
+        r = self.client.post(reverse('admin:player_callanalysis_changelist'), {
+            'action': 'requeue', '_selected_action': [self.audio.analysis.pk]}, follow=True)
+        self.assertEqual(r.status_code, 200)
+        self.audio.analysis.refresh_from_db()
+        self.assertEqual(self.audio.analysis.status, 'pending')
+
+    def test_quota_reset_action(self):
+        from .models import GeminiQuota
+        quota = GeminiQuota.objects.get()
+        self.client.post(reverse('admin:player_geminiquota_changelist'), {
+            'action': 'reset', '_selected_action': [quota.pk]}, follow=True)
+        self.assertFalse(analysis.exhausted_models())
+
+    def test_settings_is_a_single_page(self):
+        r = self.client.get(reverse('admin:player_appsettings_changelist'))
+        self.assertRedirects(r, reverse('admin:player_appsettings_change', args=[AppSettings.load().pk]))

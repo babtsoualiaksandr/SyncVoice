@@ -275,8 +275,8 @@ class AudioFile(models.Model):
 class Segment(models.Model):
     """One subtitle line: a piece of recognized text with its time range."""
 
-    audio = models.ForeignKey(AudioFile, on_delete=models.CASCADE, related_name='segments')
-    index = models.PositiveIntegerField()
+    audio = models.ForeignKey(AudioFile, verbose_name='звонок', on_delete=models.CASCADE, related_name='segments')
+    index = models.PositiveIntegerField('№')
     start = models.FloatField('начало, с')
     end = models.FloatField('конец, с')
     text = models.TextField('текст')
@@ -286,6 +286,8 @@ class Segment(models.Model):
         constraints = [
             models.UniqueConstraint(fields=['audio', 'index'], name='unique_segment_index'),
         ]
+        verbose_name = 'строка субтитров'
+        verbose_name_plural = 'субтитры'
 
     def __str__(self):
         return f'{self.start:.1f}–{self.end:.1f}: {self.text[:50]}'

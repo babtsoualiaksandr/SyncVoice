@@ -1,0 +1,124 @@
+/* SyncVoice admin: the app's palette (player.css) on top of Django's admin variables. */
+:root {
+  --sv-accent: #3b6cf6;
+  --sv-accent-soft: #e6edff;
+  --sv-ok: #1f9d55;
+  --sv-warn: #c98a0b;
+  --sv-bad: #d9423a;
+
+  --primary: #3b6cf6;
+  --secondary: #1c2230;
+  --accent: #9db7ff;
+  --primary-fg: #fff;
+  --body-fg: #1c2230;
+  --body-bg: #f6f7f9;
+  --body-quiet-color: #6b7385;
+  --body-medium-color: #3a4254;
+  --body-loud-color: #12151c;
+  --header-color: #e7eaf1;
+  --header-branding-color: #fff;
+  --header-bg: #1c2230;
+  --header-link-color: #e7eaf1;
+  --breadcrumbs-fg: #c9d4ef;
+  --breadcrumbs-link-fg: #fff;
+  --breadcrumbs-bg: #2a3550;
+  --link-fg: #3b6cf6;
+  --link-hover-color: #2448b8;
+  --link-selected-fg: #2448b8;
+  --hairline-color: #e2e5eb;
+  --border-color: #d5d9e2;
+  --darkened-bg: #eef0f4;
+  --selected-bg: #e6edff;
+  --selected-row: #eef3ff;
+  --button-bg: #3b6cf6;
+  --button-hover-bg: #2f5ad6;
+  --default-button-bg: #2448b8;
+  --default-button-hover-bg: #3b6cf6;
+  --object-tools-bg: #6b7385;
+  --font-family-primary: -apple-system, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sv-accent: #6d93ff; --sv-accent-soft: #24304f; --sv-ok: #4cc27f; --sv-warn: #e0a93a; --sv-bad: #ef6b62;
+    --primary: #6d93ff; --secondary: #0d1017; --accent: #9db7ff; --primary-fg: #fff;
+    --body-fg: #e7eaf1; --body-bg: #12151c; --body-quiet-color: #8d95a8; --body-medium-color: #c3c9d6;
+    --body-loud-color: #fff; --header-bg: #0d1017; --breadcrumbs-bg: #1b1f29; --breadcrumbs-fg: #8d95a8;
+    --link-fg: #8fb0ff; --link-hover-color: #b5cbff; --link-selected-fg: #b5cbff;
+    --hairline-color: #2b3140; --border-color: #3a4254; --darkened-bg: #1b1f29; --selected-bg: #24304f;
+    --selected-row: #1f2a44; --button-bg: #4a73e8; --button-hover-bg: #6d93ff; --default-button-bg: #6d93ff;
+    --default-button-hover-bg: #4a73e8; --object-tools-bg: #3a4254;
+  }
+}
+html[data-theme="dark"] {
+  --sv-accent: #6d93ff; --sv-accent-soft: #24304f; --sv-ok: #4cc27f; --sv-warn: #e0a93a; --sv-bad: #ef6b62;
+  --primary: #6d93ff; --secondary: #0d1017; --accent: #9db7ff; --primary-fg: #fff;
+  --body-fg: #e7eaf1; --body-bg: #12151c; --body-quiet-color: #8d95a8; --body-medium-color: #c3c9d6;
+  --body-loud-color: #fff; --header-bg: #0d1017; --breadcrumbs-bg: #1b1f29; --breadcrumbs-fg: #8d95a8;
+  --link-fg: #8fb0ff; --link-hover-color: #b5cbff; --link-selected-fg: #b5cbff;
+  --hairline-color: #2b3140; --border-color: #3a4254; --darkened-bg: #1b1f29; --selected-bg: #24304f;
+  --selected-row: #1f2a44; --button-bg: #4a73e8; --button-hover-bg: #6d93ff; --default-button-bg: #6d93ff;
+  --default-button-hover-bg: #4a73e8; --object-tools-bg: #3a4254;
+}
+
+/* Header and branding */
+#header { padding: 10px 30px; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06); }
+.sv-brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
+.sv-brand span { font-weight: 700; font-size: 1.15rem; letter-spacing: 0.01em; color: #fff; }
+.sv-brand small { font-size: 0.8rem; color: var(--sv-accent); text-transform: lowercase; }
+.sv-logo { width: 26px; height: 26px; fill: none; stroke: var(--sv-accent); stroke-width: 2.4; stroke-linecap: round; }
+div.breadcrumbs { padding: 8px 30px; }
+
+/* Cards: the module boxes on the index page and in forms */
+.module { border-radius: 12px; overflow: hidden; border: 1px solid var(--hairline-color); background: var(--body-bg); }
+.module h2, .module caption, .inline-group h2 {
+  background: var(--darkened-bg); color: var(--body-loud-color); font-weight: 600; letter-spacing: 0.01em;
+  text-transform: none; font-size: 0.95rem;
+}
+.module caption a.section, .module h2 a { color: var(--body-loud-color); }
+#content-main .app-player .model-audiofile th a, .module th a { font-weight: 500; }
+#content h1 { font-weight: 700; }
+fieldset.module { background: var(--body-bg); }
+
+/* Buttons and inputs: rounded like the app */
+.button, input[type=submit], input[type=button], .submit-row input, a.button, .object-tools a {
+  border-radius: 8px;
+}
+input[type=text], input[type=number], input[type=email], input[type=url], input[type=search], textarea, select, .vTextField {
+  border-radius: 8px;
+}
+
+/* Changelist rows */
+#changelist table tbody tr:hover td { background: var(--selected-row); }
+#changelist-filter { border-radius: 12px; }
+#changelist-filter h2 { border-radius: 12px 12px 0 0; }
+
+/* Status badges (admin.py) */
+.sv-badge {
+  display: inline-block; padding: 1px 9px; border-radius: 999px; border: 1px solid var(--border-color);
+  font-size: 0.78rem; white-space: nowrap; line-height: 1.6;
+}
+.sv-ok { color: var(--sv-ok); border-color: var(--sv-ok); }
+.sv-wait { color: var(--sv-warn); border-color: var(--sv-warn); }
+.sv-bad { color: var(--sv-bad); border-color: var(--sv-bad); font-weight: 600; }
+.sv-warn { color: var(--body-loud-color); border-color: #e0a100; background: #ffc00033; }
+.sv-none { color: var(--body-quiet-color); }
+.sv-verdict-error { border-color: #e0a100; background: #ffc00033; }
+.sv-verdict-check { border-color: #c9b000; background: #ffe60026; }
+.sv-verdict-advice { border-color: #3aa83a; background: #00ff0022; }
+.sv-verdict-ok { color: var(--sv-ok); border-color: var(--sv-ok); }
+.sv-open { white-space: nowrap; font-weight: 600; }
+
+/* The survey check's items inside a form */
+table.sv-items { border-collapse: collapse; width: 100%; margin: 0; }
+table.sv-items th, table.sv-items td { padding: 6px 8px; border-bottom: 1px solid var(--hairline-color); vertical-align: top; }
+table.sv-items th { font-weight: 600; color: var(--body-quiet-color); background: transparent; }
+
+/* The section titles in the left menu (all sections are one Django app, so none is «current») */
+#nav-sidebar .module caption, #nav-sidebar .module caption a { color: var(--body-loud-color); opacity: 1; }
+#nav-sidebar .module caption { font-weight: 600; }
+.sv-nowrap { white-space: nowrap; }
+#nav-sidebar .current-app .section:link, #nav-sidebar .current-app .section:visited,
+#nav-sidebar .module caption a.section:link, #nav-sidebar .module caption a.section:visited {
+  color: var(--body-loud-color);
+}

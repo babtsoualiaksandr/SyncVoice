@@ -46,13 +46,13 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = 'same-origin-allow-popups'
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin',
+    'player',  # first: its admin/ templates override Django's
+    'player.admin_site.SyncVoiceAdminConfig',  # django.contrib.admin with SyncVoice's own site
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'player',
 ]
 
 MIDDLEWARE = [
